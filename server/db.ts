@@ -1,6 +1,19 @@
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
+import {
+  InsertUser,
+  users,
+  storyOrders,
+  InsertStoryOrder,
+  characterUploads,
+  InsertCharacterUpload,
+  renderJobs,
+  InsertRenderJob,
+  storyFeedback,
+  InsertStoryFeedback,
+  photoDeleteLog,
+  InsertPhotoDeleteLog,
+} from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -87,6 +100,75 @@ export async function getUserByOpenId(openId: string) {
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
 
   return result.length > 0 ? result[0] : undefined;
+}
+
+export async function createStoryOrder(order: InsertStoryOrder) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(storyOrders).values(order);
+  return result;
+}
+
+export async function getStoryOrderById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(storyOrders).where(eq(storyOrders.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function getUserStoryOrders(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(storyOrders).where(eq(storyOrders.userId, userId));
+}
+
+export async function updateStoryOrder(id: number, updates: Partial<InsertStoryOrder>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.update(storyOrders).set(updates).where(eq(storyOrders.id, id));
+}
+
+export async function createCharacterUpload(upload: InsertCharacterUpload) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.insert(characterUploads).values(upload);
+}
+
+export async function getCharactersByStoryId(storyOrderId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(characterUploads).where(eq(characterUploads.storyOrderId, storyOrderId));
+}
+
+export async function createRenderJob(job: InsertRenderJob) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.insert(renderJobs).values(job);
+}
+
+export async function getRenderJobByJobId(jobId: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(renderJobs).where(eq(renderJobs.jobId, jobId)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function updateRenderJob(jobId: string, updates: Partial<InsertRenderJob>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.update(renderJobs).set(updates).where(eq(renderJobs.jobId, jobId));
+}
+
+export async function createStoryFeedback(feedback: InsertStoryFeedback) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.insert(storyFeedback).values(feedback);
+}
+
+export async function logPhotoDelete(log: InsertPhotoDeleteLog) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.insert(photoDeleteLog).values(log);
 }
 
 // TODO: add feature queries here as your schema grows.
