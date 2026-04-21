@@ -10,6 +10,7 @@ import CreateStory from "./pages/CreateStory";
 import Dashboard from "./pages/Dashboard";
 import Pricing from "./pages/Pricing";
 import Privacy from "./pages/Privacy";
+import Terms from "./pages/Terms";
 
 function Router() {
   const [location] = useLocation();
@@ -21,6 +22,7 @@ function Router() {
       <Route path={"/dashboard"} component={Dashboard} />
       <Route path={"/pricing"} component={Pricing} />
       <Route path={"/privacy"} component={Privacy} />
+      <Route path={"/terms"} component={Terms} />
       <Route path={"/404"} component={NotFound} />
       {/* Final fallback route */}
       <Route component={NotFound} />

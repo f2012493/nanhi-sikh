@@ -65,10 +65,10 @@
 - [x] Include demo stories: 'Won't share toys', 'Scared of the dark', 'Hits when angry'
 
 ## Phase 10: Testing & Deployment
-- [ ] Write vitest unit tests for backend procedures
-- [ ] Test story generation with various inputs
-- [ ] Test payment flow and order creation
+- [x] Write vitest unit tests for backend procedures
+- [x] Test story generation with various inputs
+- [x] Test payment flow and order creation
 - [ ] Test file uploads and storage
 - [ ] Test video rendering pipeline
-- [ ] Perform end-to-end testing of complete user flow
-- [ ] Create checkpoint and prepare for deployment
+- [x] Perform end-to-end testing of complete user flow
+- [x] Create checkpoint and prepare for deployment
