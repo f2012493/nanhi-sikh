@@ -1,34 +1,28 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ChevronLeft, ChevronRight, Upload } from "lucide-react";
+import { ChevronLeft, ChevronRight, Upload, AlertCircle, Loader2 } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
+import { trpc } from "@/lib/trpc";
+import { toast } from "sonner";
 
 type StoryFormData = {
-  // Step 1
   childName: string;
   childAge: number;
   childGender: "male" | "female" | "other";
-  childPhoto: File | null;
+  childPhotoFile: File | null;
+  childPhotoUrl: string;
   language: "en" | "hi" | "hinglish";
-  
-  // Step 2
   parentingChallenge: string;
   childPersonality: string;
-  
-  // Step 3
   characterPhotos: Array<{ file: File; name: string; role: string }>;
-  
-  // Step 4
   animationStyle: "cartoon" | "storybook" | "magical";
   musicMood: "playful" | "calm" | "adventurous";
   videoLength: "short" | "full";
-  
-  // Step 5
   storyScript: string;
 };
 
@@ -47,11 +41,16 @@ export default function CreateStory() {
   const { isAuthenticated } = useAuth();
   const [, navigate] = useLocation();
   const [currentStep, setCurrentStep] = useState(1);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [storyOrderId, setStoryOrderId] = useState<number | null>(null);
+
   const [formData, setFormData] = useState<StoryFormData>({
     childName: "",
     childAge: 5,
     childGender: "other",
-    childPhoto: null,
+    childPhotoFile: null,
+    childPhotoUrl: "",
     language: "en",
     parentingChallenge: "",
     childPersonality: "",
@@ -62,14 +61,42 @@ export default function CreateStory() {
     storyScript: "",
   });
 
+  const createStoryMutation = trpc.story.create.useMutation();
+  const generateScriptMutation = trpc.story.generateScript.useMutation();
+
+  // Redirect if not authenticated
+  useEffect(() => {
+    if (!isAuthenticated) {
+      navigate("/");
+    }
+  }, [isAuthenticated, navigate]);
+
   if (!isAuthenticated) {
-    navigate("/");
     return null;
   }
 
+  const validateStep = (step: number): boolean => {
+    const newErrors: Record<string, string> = {};
+
+    if (step === 1) {
+      if (!formData.childName.trim()) newErrors.childName = "Child's name is required";
+      if (formData.childAge < 2 || formData.childAge > 10) newErrors.childAge = "Age must be between 2 and 10";
+      if (!formData.childPhotoFile) newErrors.childPhoto = "Child's photo is required";
+    } else if (step === 2) {
+      if (formData.parentingChallenge.length < 10) {
+        newErrors.parentingChallenge = "Please describe the challenge in at least 10 characters";
+      }
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
   const handleNext = () => {
-    if (currentStep < 5) {
-      setCurrentStep(currentStep + 1);
+    if (validateStep(currentStep)) {
+      if (currentStep < 5) {
+        setCurrentStep(currentStep + 1);
+      }
     }
   };
 
@@ -84,20 +111,88 @@ export default function CreateStory() {
       ...prev,
       [field]: value,
     }));
+    // Clear error for this field
+    if (errors[field]) {
+      setErrors((prev) => {
+        const newErrors = { ...prev };
+        delete newErrors[field];
+        return newErrors;
+      });
+    }
   };
 
-  const handleFileUpload = (field: "childPhoto", file: File) => {
-    handleInputChange(field, file);
+  const handleFileUpload = (field: "childPhotoFile", file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const url = e.target?.result as string;
+      setFormData((prev) => ({
+        ...prev,
+        [field]: file,
+        childPhotoUrl: url,
+      }));
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleCharacterPhotoAdd = (file: File, name: string, role: string) => {
-    setFormData((prev) => ({
-      ...prev,
-      characterPhotos: [
-        ...prev.characterPhotos,
-        { file, name, role },
-      ].slice(0, 3),
-    }));
+    const reader = new FileReader();
+    reader.onload = () => {
+      setFormData((prev) => ({
+        ...prev,
+        characterPhotos: [
+          ...prev.characterPhotos,
+          { file, name, role },
+        ].slice(0, 3),
+      }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleGenerateStory = async () => {
+    if (!validateStep(5)) return;
+
+    setIsGenerating(true);
+    try {
+      // Step 1: Create story order
+      const result = await createStoryMutation.mutateAsync({
+        childName: formData.childName,
+        childAge: formData.childAge,
+        childGender: formData.childGender,
+        childPhotoUrl: formData.childPhotoUrl,
+        language: formData.language,
+        parentingChallenge: formData.parentingChallenge,
+        childPersonality: formData.childPersonality,
+        animationStyle: formData.animationStyle,
+        musicMood: formData.musicMood,
+        videoLength: formData.videoLength,
+      });
+
+      setStoryOrderId(result.id);
+
+      // Step 2: Generate script
+      const characterNames = formData.characterPhotos.map((c) => c.name);
+      const scriptResult = await generateScriptMutation.mutateAsync({
+        storyOrderId: result.id,
+        childName: formData.childName,
+        childAge: formData.childAge,
+        language: formData.language,
+        parentingChallenge: formData.parentingChallenge,
+        childPersonality: formData.childPersonality,
+        characterNames: characterNames.length > 0 ? characterNames : undefined,
+      });
+
+      setFormData((prev) => ({
+        ...prev,
+        storyScript: JSON.stringify(scriptResult, null, 2),
+      }));
+
+      toast.success("Story script generated! Review and customize if needed.");
+      setCurrentStep(5);
+    } catch (error: any) {
+      toast.error(error.message || "Failed to generate story");
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const renderStep = () => {
@@ -106,33 +201,41 @@ export default function CreateStory() {
         return (
           <div className="space-y-6">
             <h2 className="text-3xl font-bold text-gray-900">About Your Child</h2>
-            
+
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Child's Name
+                  Child's Name *
                 </label>
                 <Input
                   placeholder="e.g., Aditya"
                   value={formData.childName}
                   onChange={(e) => handleInputChange("childName", e.target.value)}
-                  className="w-full"
+                  className={`w-full ${errors.childName ? "border-red-500" : ""}`}
                 />
+                {errors.childName && (
+                  <p className="text-sm text-red-600 mt-1 flex items-center gap-1">
+                    <AlertCircle className="h-4 w-4" /> {errors.childName}
+                  </p>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Age
+                    Age *
                   </label>
                   <Input
                     type="number"
                     min="2"
                     max="10"
                     value={formData.childAge}
-                    onChange={(e) => handleInputChange("childAge", parseInt(e.target.value))}
-                    className="w-full"
+                    onChange={(e) => handleInputChange("childAge", parseInt(e.target.value) || 5)}
+                    className={`w-full ${errors.childAge ? "border-red-500" : ""}`}
                   />
+                  {errors.childAge && (
+                    <p className="text-sm text-red-600 mt-1">{errors.childAge}</p>
+                  )}
                 </div>
 
                 <div>
@@ -154,24 +257,33 @@ export default function CreateStory() {
 
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Upload Child's Photo
+                  Upload Child's Photo *
                 </label>
                 <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-indigo-500 transition">
-                  <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
-                  <p className="text-gray-600">Click to upload or drag and drop</p>
                   <input
                     type="file"
                     accept="image/*"
                     onChange={(e) => {
                       if (e.target.files?.[0]) {
-                        handleFileUpload("childPhoto", e.target.files[0]);
+                        handleFileUpload("childPhotoFile", e.target.files[0]);
                       }
                     }}
                     className="hidden"
+                    id="childPhotoInput"
                   />
+                  <label htmlFor="childPhotoInput" className="cursor-pointer block">
+                    <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                    <p className="text-gray-600">Click to upload or drag and drop</p>
+                  </label>
                 </div>
-                {formData.childPhoto && (
-                  <p className="text-sm text-green-600 mt-2">✓ {formData.childPhoto.name} uploaded</p>
+                {formData.childPhotoFile && (
+                  <p className="text-sm text-green-600 mt-2">✓ {formData.childPhotoFile.name} uploaded</p>
+                )}
+                {formData.childPhotoUrl && (
+                  <img src={formData.childPhotoUrl} alt="Child preview" className="mt-4 h-32 w-32 object-cover rounded-lg" />
+                )}
+                {errors.childPhoto && (
+                  <p className="text-sm text-red-600 mt-1">{errors.childPhoto}</p>
                 )}
               </div>
 
@@ -198,17 +310,20 @@ export default function CreateStory() {
         return (
           <div className="space-y-6">
             <h2 className="text-3xl font-bold text-gray-900">What's the Challenge?</h2>
-            
+
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-3">
-                Describe the behavior or habit you want to address
+                Describe the behavior or habit you want to address *
               </label>
               <Textarea
                 placeholder="e.g., My son throws tantrums when screen time ends and refuses to go to bed..."
                 value={formData.parentingChallenge}
                 onChange={(e) => handleInputChange("parentingChallenge", e.target.value)}
-                className="w-full min-h-32"
+                className={`w-full min-h-32 ${errors.parentingChallenge ? "border-red-500" : ""}`}
               />
+              {errors.parentingChallenge && (
+                <p className="text-sm text-red-600 mt-1">{errors.parentingChallenge}</p>
+              )}
             </div>
 
             <div>
@@ -250,7 +365,7 @@ export default function CreateStory() {
         return (
           <div className="space-y-6">
             <h2 className="text-3xl font-bold text-gray-900">Supporting Characters (Optional)</h2>
-            
+
             <p className="text-gray-600">
               Upload photos of siblings, friends, or pets to make the story even more personal (up to 3 characters)
             </p>
@@ -265,8 +380,6 @@ export default function CreateStory() {
 
               {formData.characterPhotos.length < 3 && (
                 <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-indigo-500 transition">
-                  <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
-                  <p className="text-gray-600 mb-4">Upload character photo</p>
                   <input
                     type="file"
                     accept="image/*"
@@ -280,7 +393,12 @@ export default function CreateStory() {
                       }
                     }}
                     className="hidden"
+                    id="characterPhotoInput"
                   />
+                  <label htmlFor="characterPhotoInput" className="cursor-pointer block">
+                    <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                    <p className="text-gray-600">Upload character photo</p>
+                  </label>
                 </div>
               )}
             </div>
@@ -291,7 +409,7 @@ export default function CreateStory() {
         return (
           <div className="space-y-6">
             <h2 className="text-3xl font-bold text-gray-900">Customize the Story</h2>
-            
+
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-3">
                 Animation Style
@@ -373,31 +491,33 @@ export default function CreateStory() {
         return (
           <div className="space-y-6">
             <h2 className="text-3xl font-bold text-gray-900">Review & Generate</h2>
-            
+
             <Card className="p-6 bg-blue-50 border-blue-200">
               <p className="text-blue-900">
                 <strong>Summary:</strong> We'll generate a personalized 10-scene story for <strong>{formData.childName}</strong> ({formData.childAge} years old) about <strong>{formData.parentingChallenge}</strong> in <strong>{formData.language.toUpperCase()}</strong>.
               </p>
             </Card>
 
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">
-                Story Script Preview (10 scenes)
-              </label>
-              <Textarea
-                placeholder="Your AI-generated story script will appear here after generation..."
-                value={formData.storyScript}
-                onChange={(e) => handleInputChange("storyScript", e.target.value)}
-                className="w-full min-h-48 text-sm"
-                readOnly
-              />
-            </div>
+            {formData.storyScript && (
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Story Script Preview (10 scenes)
+                </label>
+                <Textarea
+                  value={formData.storyScript}
+                  onChange={(e) => handleInputChange("storyScript", e.target.value)}
+                  className="w-full min-h-48 text-sm font-mono"
+                />
+              </div>
+            )}
 
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-              <p className="text-sm text-yellow-900">
-                <strong>Note:</strong> You can edit the script above before we generate your video. Each scene will be illustrated and narrated with a warm, engaging voice.
-              </p>
-            </div>
+            {!formData.storyScript && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                <p className="text-sm text-yellow-900">
+                  <strong>Ready to generate?</strong> Click "Generate Story" to create your personalized script. This may take a moment.
+                </p>
+              </div>
+            )}
           </div>
         );
 
@@ -445,13 +565,12 @@ export default function CreateStory() {
 
           {currentStep === 5 ? (
             <Button
-              onClick={() => {
-                // TODO: Submit form and generate story
-                console.log("Generate story", formData);
-              }}
-              className="bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white"
+              onClick={handleGenerateStory}
+              disabled={isGenerating || !!formData.storyScript}
+              className="bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white flex items-center gap-2"
             >
-              Generate My Video
+              {isGenerating && <Loader2 className="h-4 w-4 animate-spin" />}
+              {isGenerating ? "Generating..." : formData.storyScript ? "Story Generated!" : "Generate My Video"}
             </Button>
           ) : (
             <Button

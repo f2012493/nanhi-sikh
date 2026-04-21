@@ -106,7 +106,9 @@ export async function createStoryOrder(order: InsertStoryOrder) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const result = await db.insert(storyOrders).values(order);
-  return result;
+  // Get the inserted record
+  const inserted = await db.select().from(storyOrders).where(eq(storyOrders.userId, order.userId)).orderBy(storyOrders.id).limit(1);
+  return inserted[0] || { id: 0 };
 }
 
 export async function getStoryOrderById(id: number) {
