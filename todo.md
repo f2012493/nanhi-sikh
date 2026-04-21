@@ -54,15 +54,15 @@
 
 ## Phase 8: File Storage & Compliance
 - [ ] Implement S3 file storage for photos and videos
-- [ ] Create auto-deletion policy for child photos (30 days)
-- [ ] Implement COPPA and DPDP compliance measures
-- [ ] Add privacy policy and terms of service pages
+- [x] Create auto-deletion policy for child photos (30 days)
+- [x] Implement COPPA and DPDP compliance measures
+- [x] Add privacy policy and terms of service pages
 - [ ] Implement data retention and deletion tracking
 
 ## Phase 9: Database Seeding
-- [ ] Seed database with 3 demo stories in English
-- [ ] Seed database with 3 demo stories in Hindi
-- [ ] Include demo stories: 'Won't share toys', 'Scared of the dark', 'Hits when angry'
+- [x] Seed database with 3 demo stories in English
+- [x] Seed database with 3 demo stories in Hindi
+- [x] Include demo stories: 'Won't share toys', 'Scared of the dark', 'Hits when angry'
 
 ## Phase 10: Testing & Deployment
 - [ ] Write vitest unit tests for backend procedures
