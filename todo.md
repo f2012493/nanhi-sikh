@@ -33,11 +33,11 @@
 - [ ] Add render progress tracking and status polling
 
 ## Phase 5: Payment Integration
-- [ ] Integrate Razorpay payment gateway
-- [ ] Implement three pricing tiers (preview watermarked, HD, HD + WhatsApp delivery)
-- [ ] Create checkout flow with GST-inclusive pricing display
+- [x] Integrate Razorpay payment gateway
+- [x] Implement three pricing tiers (preview watermarked, HD, HD + WhatsApp delivery)
+- [x] Create checkout flow with GST-inclusive pricing display
 - [ ] Implement HMAC signature verification for payment callbacks
-- [ ] Store order and payment metadata in database
+- [x] Store order and payment metadata in database
 
 ## Phase 6: Video Delivery & Sharing
 - [ ] Implement in-app video streaming
