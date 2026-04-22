@@ -15,6 +15,13 @@
       "when": 1776781673380,
       "tag": "0001_kind_rhodey",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1776869940743,
+      "tag": "0002_rare_colleen_wing",
+      "breakpoints": true
     }
   ]
 }

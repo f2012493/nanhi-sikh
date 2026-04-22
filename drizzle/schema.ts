@@ -48,6 +48,12 @@ export const storyOrders = mysqlTable("story_orders", {
   renderJobId: varchar("renderJobId", { length: 255 }),
   renderStatus: mysqlEnum("renderStatus", ["pending", "generating_script", "generating_images", "generating_voiceover", "stitching", "completed", "failed"]).default("pending").notNull(),
   renderProgress: int("renderProgress").default(0).notNull(),
+  finalVideoUrl: text("finalVideoUrl"), // Final narrated video URL
+  finalVideoKey: text("finalVideoKey"), // S3 key for final video
+  finalVideoJobId: varchar("finalVideoJobId", { length: 255 }), // Job ID for final video generation
+  finalVideoStatus: mysqlEnum("finalVideoStatus", ["pending", "reading_story", "generating_scenes", "creating_narration", "rendering_video", "finalizing_export", "completed", "failed"]).default("pending").notNull(),
+  finalVideoProgress: int("finalVideoProgress").default(0).notNull(),
+  finalVideoStage: varchar("finalVideoStage", { length: 255 }), // Current stage of final video generation
   paymentStatus: mysqlEnum("paymentStatus", ["pending", "completed", "failed"]).default("pending").notNull(),
   pricingTier: mysqlEnum("pricingTier", ["preview", "hd", "hd_whatsapp"]).default("preview").notNull(),
   amountPaid: int("amountPaid").default(0).notNull(), // in paise (₹0.01 units)
@@ -59,6 +65,26 @@ export const storyOrders = mysqlTable("story_orders", {
 
 export type StoryOrder = typeof storyOrders.$inferSelect;
 export type InsertStoryOrder = typeof storyOrders.$inferInsert;
+
+/**
+ * Final video render jobs table - tracks async final video generation
+ */
+export const finalVideoRenderJobs = mysqlTable("final_video_render_jobs", {
+  id: int("id").autoincrement().primaryKey(),
+  storyOrderId: int("storyOrderId").notNull().references(() => storyOrders.id),
+  jobId: varchar("jobId", { length: 255 }).notNull().unique(),
+  status: mysqlEnum("status", ["queued", "processing", "completed", "failed"]).default("queued").notNull(),
+  stage: varchar("stage", { length: 255 }), // Current processing stage
+  progress: int("progress").default(0).notNull(),
+  errorMessage: text("errorMessage"),
+  retryCount: int("retryCount").default(0).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  completedAt: timestamp("completedAt"),
+});
+
+export type FinalVideoRenderJob = typeof finalVideoRenderJobs.$inferSelect;
+export type InsertFinalVideoRenderJob = typeof finalVideoRenderJobs.$inferInsert;
 
 /**
  * Character uploads table - stores additional character photos for stories
