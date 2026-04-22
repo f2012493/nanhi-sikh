@@ -25,12 +25,12 @@
 
 ## Phase 4: AI Story Generation & Video Rendering
 - [x] Implement GPT-4 story script generation (10-scene JSON structure)
-- [ ] Create scene image generation using AI image model
-- [ ] Implement child face consistency across scenes (InsightFace/IP-Adapter)
-- [ ] Integrate ElevenLabs TTS for voiceover narration
-- [ ] Implement FFmpeg video stitching pipeline
-- [ ] Create async job queue for video rendering
-- [ ] Add render progress tracking and status polling
+- [x] Create scene image generation using AI image model
+- [x] Implement child face consistency across scenes (via image generation API)
+- [x] Integrate ElevenLabs TTS for voiceover narration
+- [x] Implement FFmpeg video stitching pipeline
+- [x] Create async job queue for video rendering
+- [x] Add render progress tracking and status polling
 
 ## Phase 5: Payment Integration
 - [x] Integrate Razorpay payment gateway
