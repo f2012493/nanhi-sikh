@@ -9,7 +9,46 @@ function getQueryParam(req: Request, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+const DEV_LOGIN_OPEN_ID = "local-dev-user";
+const DEV_LOGIN_NAME = "Local Dev";
+
+function registerDevLoginRoute(app: Express) {
+  app.get("/api/dev-login", async (req: Request, res: Response) => {
+    try {
+      await db.upsertUser({
+        openId: DEV_LOGIN_OPEN_ID,
+        name: DEV_LOGIN_NAME,
+        email: "dev@localhost",
+        loginMethod: "dev",
+        lastSignedIn: new Date(),
+      });
+
+      const sessionToken = await sdk.createSessionToken(DEV_LOGIN_OPEN_ID, {
+        name: DEV_LOGIN_NAME,
+        expiresInMs: ONE_YEAR_MS,
+      });
+
+      const cookieOptions = getSessionCookieOptions(req);
+      res.cookie(COOKIE_NAME, sessionToken, {
+        ...cookieOptions,
+        sameSite: "lax",
+        maxAge: ONE_YEAR_MS,
+      });
+
+      res.redirect(302, "/");
+    } catch (error) {
+      console.error("[DevLogin] Failed:", error);
+      res.status(500).json({ error: "Dev login failed" });
+    }
+  });
+}
+
 export function registerOAuthRoutes(app: Express) {
+  if (process.env.NODE_ENV !== "production") {
+    registerDevLoginRoute(app);
+    console.log("[OAuth] Registered /api/dev-login (dev only)");
+  }
+
   app.get("/api/oauth/callback", async (req: Request, res: Response) => {
     const code = getQueryParam(req, "code");
     const state = getQueryParam(req, "state");
