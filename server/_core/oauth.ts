@@ -15,13 +15,18 @@ const DEV_LOGIN_NAME = "Local Dev";
 function registerDevLoginRoute(app: Express) {
   app.get("/api/dev-login", async (req: Request, res: Response) => {
     try {
-      await db.upsertUser({
-        openId: DEV_LOGIN_OPEN_ID,
-        name: DEV_LOGIN_NAME,
-        email: "dev@localhost",
-        loginMethod: "dev",
-        lastSignedIn: new Date(),
-      });
+      // Try to upsert user in DB if available, but don't fail if DB isn't configured
+      try {
+        await db.upsertUser({
+          openId: DEV_LOGIN_OPEN_ID,
+          name: DEV_LOGIN_NAME,
+          email: "dev@localhost",
+          loginMethod: "dev",
+          lastSignedIn: new Date(),
+        });
+      } catch (dbErr) {
+        console.warn("[DevLogin] Database upsert failed (will continue without persistence):", dbErr);
+      }
 
       const sessionToken = await sdk.createSessionToken(DEV_LOGIN_OPEN_ID, {
         name: DEV_LOGIN_NAME,
