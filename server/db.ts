@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -120,15 +120,19 @@ export async function createStoryOrder(order: InsertStoryOrder) {
     // Insert the record
     await db.insert(storyOrders).values(sanitized);
 
-    // Get the most recently inserted record for this user
+    // Get the most recently inserted record for this user (DESC to get newest)
     const inserted = await db
       .select()
       .from(storyOrders)
       .where(eq(storyOrders.userId, order.userId))
-      .orderBy(storyOrders.createdAt)
+      .orderBy(desc(storyOrders.createdAt))
       .limit(1);
 
-    return inserted[0] || { id: 0 };
+    if (!inserted[0]) {
+      throw new Error("Failed to retrieve inserted story order");
+    }
+
+    return inserted[0];
   } catch (error) {
     console.error("[DB] createStoryOrder failed:", error);
     throw error;

@@ -320,7 +320,8 @@ Production build verified ✅
 - [x] Update CreateStory component to upload images first, then pass URLs
 - [x] Validate story_orders table schema for NOT NULL columns and constraints
 - [x] Implement safe insert logic with payload sanitization in createStoryOrder
+- [x] Fix createStoryOrder to return newest inserted row (DESC ordering)
 - [x] Add comprehensive error logging to backend
 - [x] Fix frontend error handling to show user-friendly messages
-- [ ] Apply database migration to add final video fields
-- [ ] Test complete flow with sample data (Neel, age 3, male, Hindi)
+- [x] Apply database migration to add final video fields
+- [x] All tests passing (14/14) after migration
