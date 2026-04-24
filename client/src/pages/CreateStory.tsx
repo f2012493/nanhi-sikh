@@ -16,6 +16,7 @@ type StoryFormData = {
   childGender: "male" | "female" | "other";
   childPhotoFile: File | null;
   childPhotoUrl: string;
+  childPhotoKey: string;
   language: "en" | "hi" | "hinglish";
   parentingChallenge: string;
   childPersonality: string;
@@ -44,6 +45,7 @@ export default function CreateStory() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isGenerating, setIsGenerating] = useState(false);
   const [storyOrderId, setStoryOrderId] = useState<number | null>(null);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
   const [formData, setFormData] = useState<StoryFormData>({
     childName: "",
@@ -51,6 +53,7 @@ export default function CreateStory() {
     childGender: "other",
     childPhotoFile: null,
     childPhotoUrl: "",
+    childPhotoKey: "",
     language: "en",
     parentingChallenge: "",
     childPersonality: "",
@@ -63,6 +66,7 @@ export default function CreateStory() {
 
   const createStoryMutation = trpc.story.create.useMutation();
   const generateScriptMutation = trpc.story.generateScript.useMutation();
+  const uploadPhotoMutation = trpc.upload.uploadChildPhoto.useMutation();
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -81,7 +85,7 @@ export default function CreateStory() {
     if (step === 1) {
       if (!formData.childName.trim()) newErrors.childName = "Child's name is required";
       if (formData.childAge < 2 || formData.childAge > 10) newErrors.childAge = "Age must be between 2 and 10";
-      if (!formData.childPhotoFile) newErrors.childPhoto = "Child's photo is required";
+      if (!formData.childPhotoUrl) newErrors.childPhoto = "Child's photo is required";
     } else if (step === 2) {
       if (formData.parentingChallenge.length < 10) {
         newErrors.parentingChallenge = "Please describe the challenge in at least 10 characters";
@@ -121,31 +125,52 @@ export default function CreateStory() {
     }
   };
 
-  const handleFileUpload = (field: "childPhotoFile", file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const url = e.target?.result as string;
-      setFormData((prev) => ({
-        ...prev,
-        [field]: file,
-        childPhotoUrl: url,
-      }));
-    };
-    reader.readAsDataURL(file);
+  const handleFileUpload = async (field: "childPhotoFile", file: File) => {
+    try {
+      setIsUploadingPhoto(true);
+      
+      // Read file as base64
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const base64Data = e.target?.result as string;
+        
+        try {
+          // Upload to storage via API
+          const result = await uploadPhotoMutation.mutateAsync({
+            base64Data,
+            fileName: file.name,
+          });
+
+          // Store only the URL and key, not the base64
+          setFormData((prev) => ({
+            ...prev,
+            [field]: file,
+            childPhotoUrl: result.url,
+            childPhotoKey: result.key,
+          }));
+
+          toast.success("Photo uploaded successfully!");
+        } catch (error: any) {
+          toast.error(error.message || "Failed to upload photo");
+        } finally {
+          setIsUploadingPhoto(false);
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (error: any) {
+      toast.error("Failed to read file");
+      setIsUploadingPhoto(false);
+    }
   };
 
   const handleCharacterPhotoAdd = (file: File, name: string, role: string) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      setFormData((prev) => ({
-        ...prev,
-        characterPhotos: [
-          ...prev.characterPhotos,
-          { file, name, role },
-        ].slice(0, 3),
-      }));
-    };
-    reader.readAsDataURL(file);
+    setFormData((prev) => ({
+      ...prev,
+      characterPhotos: [
+        ...prev.characterPhotos,
+        { file, name, role },
+      ].slice(0, 3),
+    }));
   };
 
   const handleGenerateStory = async () => {
@@ -153,18 +178,19 @@ export default function CreateStory() {
 
     setIsGenerating(true);
     try {
-      // Step 1: Create story order
+      // Step 1: Create story order with storage URL (not base64)
       const result = await createStoryMutation.mutateAsync({
         childName: formData.childName,
         childAge: formData.childAge,
         childGender: formData.childGender,
-        childPhotoUrl: formData.childPhotoUrl,
-        language: formData.language,
+        childPhotoUrl: formData.childPhotoUrl, // Storage URL only
+        childPhotoKey: formData.childPhotoKey,
+        language: formData.language as "en" | "hi" | "hinglish",
         parentingChallenge: formData.parentingChallenge,
         childPersonality: formData.childPersonality,
-        animationStyle: formData.animationStyle,
-        musicMood: formData.musicMood,
-        videoLength: formData.videoLength,
+        animationStyle: formData.animationStyle as "cartoon" | "storybook" | "magical",
+        musicMood: formData.musicMood as "playful" | "calm" | "adventurous",
+        videoLength: formData.videoLength as "short" | "full",
       });
 
       setStoryOrderId(result.id);
@@ -175,7 +201,7 @@ export default function CreateStory() {
         storyOrderId: result.id,
         childName: formData.childName,
         childAge: formData.childAge,
-        language: formData.language,
+        language: formData.language as "en" | "hi" | "hinglish",
         parentingChallenge: formData.parentingChallenge,
         childPersonality: formData.childPersonality,
         characterNames: characterNames.length > 0 ? characterNames : undefined,
@@ -189,7 +215,10 @@ export default function CreateStory() {
       toast.success("Story script generated! Review and customize if needed.");
       setCurrentStep(5);
     } catch (error: any) {
-      toast.error(error.message || "Failed to generate story");
+      // Show user-friendly error message
+      const errorMessage = error.message || "Unable to create your video. Please try again.";
+      toast.error(errorMessage);
+      console.error("[CreateStory] Error:", error);
     } finally {
       setIsGenerating(false);
     }
@@ -199,163 +228,140 @@ export default function CreateStory() {
     switch (currentStep) {
       case 1:
         return (
-          <div className="space-y-6">
-            <h2 className="text-3xl font-bold text-gray-900">About Your Child</h2>
+          <div className="space-y-4">
+            <h2 className="text-2xl font-bold">Tell us about your child</h2>
+            
+            <div>
+              <label className="block text-sm font-medium mb-2">Child's Name *</label>
+              <Input
+                value={formData.childName}
+                onChange={(e) => handleInputChange("childName", e.target.value)}
+                placeholder="e.g., Aditya"
+                className={errors.childName ? "border-red-500" : ""}
+              />
+              {errors.childName && <p className="text-red-500 text-sm mt-1">{errors.childName}</p>}
+            </div>
 
-            <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Child's Name *
-                </label>
+                <label className="block text-sm font-medium mb-2">Age *</label>
                 <Input
-                  placeholder="e.g., Aditya"
-                  value={formData.childName}
-                  onChange={(e) => handleInputChange("childName", e.target.value)}
-                  className={`w-full ${errors.childName ? "border-red-500" : ""}`}
+                  type="number"
+                  min="2"
+                  max="10"
+                  value={formData.childAge}
+                  onChange={(e) => handleInputChange("childAge", parseInt(e.target.value))}
+                  className={errors.childAge ? "border-red-500" : ""}
                 />
-                {errors.childName && (
-                  <p className="text-sm text-red-600 mt-1 flex items-center gap-1">
-                    <AlertCircle className="h-4 w-4" /> {errors.childName}
-                  </p>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Age *
-                  </label>
-                  <Input
-                    type="number"
-                    min="2"
-                    max="10"
-                    value={formData.childAge}
-                    onChange={(e) => handleInputChange("childAge", parseInt(e.target.value) || 5)}
-                    className={`w-full ${errors.childAge ? "border-red-500" : ""}`}
-                  />
-                  {errors.childAge && (
-                    <p className="text-sm text-red-600 mt-1">{errors.childAge}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Gender
-                  </label>
-                  <Select value={formData.childGender} onValueChange={(value) => handleInputChange("childGender", value)}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="male">Boy</SelectItem>
-                      <SelectItem value="female">Girl</SelectItem>
-                      <SelectItem value="other">Other</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                {errors.childAge && <p className="text-red-500 text-sm mt-1">{errors.childAge}</p>}
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Upload Child's Photo *
-                </label>
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-indigo-500 transition">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => {
-                      if (e.target.files?.[0]) {
-                        handleFileUpload("childPhotoFile", e.target.files[0]);
-                      }
-                    }}
-                    className="hidden"
-                    id="childPhotoInput"
-                  />
-                  <label htmlFor="childPhotoInput" className="cursor-pointer block">
-                    <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
-                    <p className="text-gray-600">Click to upload or drag and drop</p>
-                  </label>
-                </div>
-                {formData.childPhotoFile && (
-                  <p className="text-sm text-green-600 mt-2">✓ {formData.childPhotoFile.name} uploaded</p>
-                )}
-                {formData.childPhotoUrl && (
-                  <img src={formData.childPhotoUrl} alt="Child preview" className="mt-4 h-32 w-32 object-cover rounded-lg" />
-                )}
-                {errors.childPhoto && (
-                  <p className="text-sm text-red-600 mt-1">{errors.childPhoto}</p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Preferred Language
-                </label>
-                <Select value={formData.language} onValueChange={(value) => handleInputChange("language", value)}>
+                <label className="block text-sm font-medium mb-2">Gender *</label>
+                <Select value={formData.childGender} onValueChange={(value) => handleInputChange("childGender", value)}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="en">English</SelectItem>
-                    <SelectItem value="hi">Hindi</SelectItem>
-                    <SelectItem value="hinglish">Hinglish</SelectItem>
+                    <SelectItem value="male">Boy</SelectItem>
+                    <SelectItem value="female">Girl</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Child's Photo *</label>
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-blue-500 transition">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    if (e.target.files?.[0]) {
+                      handleFileUpload("childPhotoFile", e.target.files[0]);
+                    }
+                  }}
+                  className="hidden"
+                  id="childPhoto"
+                  disabled={isUploadingPhoto}
+                />
+                <label htmlFor="childPhoto" className="cursor-pointer block">
+                  {isUploadingPhoto ? (
+                    <>
+                      <Loader2 className="h-8 w-8 mx-auto mb-2 animate-spin" />
+                      <p>Uploading...</p>
+                    </>
+                  ) : formData.childPhotoUrl ? (
+                    <>
+                      <img src={formData.childPhotoUrl} alt="Child" className="h-32 w-32 mx-auto rounded mb-2 object-cover" />
+                      <p className="text-sm text-green-600">Photo uploaded ✓</p>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="h-8 w-8 mx-auto mb-2 text-gray-400" />
+                      <p className="text-sm">Click to upload or drag and drop</p>
+                    </>
+                  )}
+                </label>
+              </div>
+              {errors.childPhoto && <p className="text-red-500 text-sm mt-1">{errors.childPhoto}</p>}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Language *</label>
+              <Select value={formData.language} onValueChange={(value) => handleInputChange("language", value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="en">English</SelectItem>
+                  <SelectItem value="hi">Hindi</SelectItem>
+                  <SelectItem value="hinglish">Hinglish</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
         );
 
       case 2:
         return (
-          <div className="space-y-6">
-            <h2 className="text-3xl font-bold text-gray-900">What's the Challenge?</h2>
-
+          <div className="space-y-4">
+            <h2 className="text-2xl font-bold">What's the parenting challenge?</h2>
+            
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-3">
-                Describe the behavior or habit you want to address *
-              </label>
+              <label className="block text-sm font-medium mb-2">Describe the challenge *</label>
               <Textarea
-                placeholder="e.g., My son throws tantrums when screen time ends and refuses to go to bed..."
                 value={formData.parentingChallenge}
                 onChange={(e) => handleInputChange("parentingChallenge", e.target.value)}
-                className={`w-full min-h-32 ${errors.parentingChallenge ? "border-red-500" : ""}`}
+                placeholder="e.g., My child refuses to share toys with siblings and gets angry when others touch his belongings..."
+                className={`min-h-32 ${errors.parentingChallenge ? "border-red-500" : ""}`}
               />
-              {errors.parentingChallenge && (
-                <p className="text-sm text-red-600 mt-1">{errors.parentingChallenge}</p>
-              )}
+              {errors.parentingChallenge && <p className="text-red-500 text-sm mt-1">{errors.parentingChallenge}</p>}
             </div>
 
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-3">
-                Quick Suggestions (click to select)
-              </label>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <p className="text-sm font-medium mb-2">Quick suggestions:</p>
+              <div className="grid grid-cols-2 gap-2">
                 {PARENTING_CHALLENGES.map((challenge) => (
                   <button
                     key={challenge.label}
                     onClick={() => handleInputChange("parentingChallenge", challenge.label)}
-                    className={`p-3 rounded-lg border-2 transition text-sm font-medium ${
-                      formData.parentingChallenge === challenge.label
-                        ? "border-indigo-600 bg-indigo-50"
-                        : "border-gray-200 hover:border-indigo-300"
-                    }`}
+                    className="p-2 border rounded hover:bg-blue-50 transition text-left text-sm"
                   >
-                    <span className="text-lg">{challenge.emoji}</span> {challenge.label}
+                    <span className="mr-2">{challenge.emoji}</span>
+                    {challenge.label}
                   </button>
                 ))}
               </div>
             </div>
 
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">
-                Anything else we should know? (optional)
-              </label>
-              <Textarea
-                placeholder="e.g., He loves dinosaurs, his best friend is Rohan, he's very imaginative..."
+              <label className="block text-sm font-medium mb-2">Child's personality (optional)</label>
+              <Input
                 value={formData.childPersonality}
                 onChange={(e) => handleInputChange("childPersonality", e.target.value)}
-                className="w-full min-h-24"
+                placeholder="e.g., Shy, outgoing, creative, adventurous..."
               />
             </div>
           </div>
@@ -363,159 +369,153 @@ export default function CreateStory() {
 
       case 3:
         return (
-          <div className="space-y-6">
-            <h2 className="text-3xl font-bold text-gray-900">Supporting Characters (Optional)</h2>
-
-            <p className="text-gray-600">
-              Upload photos of siblings, friends, or pets to make the story even more personal (up to 3 characters)
-            </p>
-
-            <div className="space-y-4">
+          <div className="space-y-4">
+            <h2 className="text-2xl font-bold">Add supporting characters (optional)</h2>
+            <p className="text-gray-600">Upload photos of family members or friends to include in the story</p>
+            
+            <div className="space-y-3">
               {formData.characterPhotos.map((char, idx) => (
-                <Card key={idx} className="p-4 bg-gray-50">
-                  <p className="font-semibold text-gray-900">{char.name} ({char.role})</p>
-                  <p className="text-sm text-gray-600">✓ {char.file.name}</p>
-                </Card>
+                <div key={idx} className="p-3 bg-gray-50 rounded flex items-center justify-between">
+                  <div>
+                    <p className="font-medium">{char.name}</p>
+                    <p className="text-sm text-gray-600">{char.role}</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setFormData((prev) => ({
+                        ...prev,
+                        characterPhotos: prev.characterPhotos.filter((_, i) => i !== idx),
+                      }));
+                    }}
+                    className="text-red-500 text-sm"
+                  >
+                    Remove
+                  </button>
+                </div>
               ))}
+            </div>
 
-              {formData.characterPhotos.length < 3 && (
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-indigo-500 transition">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => {
-                      if (e.target.files?.[0]) {
-                        const name = prompt("Character name:");
-                        const role = prompt("Relationship (e.g., sibling, friend, pet):");
-                        if (name && role) {
+            {formData.characterPhotos.length < 3 && (
+              <button
+                onClick={() => {
+                  const name = prompt("Character name:");
+                  if (name) {
+                    const role = prompt("Character role (e.g., sibling, friend, pet):");
+                    if (role) {
+                      const input = document.createElement("input");
+                      input.type = "file";
+                      input.accept = "image/*";
+                      input.onchange = (e: any) => {
+                        if (e.target.files?.[0]) {
                           handleCharacterPhotoAdd(e.target.files[0], name, role);
                         }
-                      }
-                    }}
-                    className="hidden"
-                    id="characterPhotoInput"
-                  />
-                  <label htmlFor="characterPhotoInput" className="cursor-pointer block">
-                    <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
-                    <p className="text-gray-600">Upload character photo</p>
-                  </label>
-                </div>
-              )}
-            </div>
+                      };
+                      input.click();
+                    }
+                  }
+                }}
+                className="w-full p-3 border-2 border-dashed rounded text-center hover:bg-blue-50 transition"
+              >
+                + Add Character
+              </button>
+            )}
           </div>
         );
 
       case 4:
         return (
-          <div className="space-y-6">
-            <h2 className="text-3xl font-bold text-gray-900">Customize the Story</h2>
-
+          <div className="space-y-4">
+            <h2 className="text-2xl font-bold">Customize the story</h2>
+            
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-3">
-                Animation Style
-              </label>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {[
-                  { value: "cartoon", label: "🎨 Colorful Cartoon", desc: "Chhota Bheem-inspired" },
-                  { value: "storybook", label: "🖼️ Storybook", desc: "Soft watercolor" },
-                  { value: "magical", label: "🌟 Magical Glow", desc: "Dreamlike & dreamy" },
-                ].map((style) => (
-                  <button
-                    key={style.value}
-                    onClick={() => handleInputChange("animationStyle", style.value)}
-                    className={`p-4 rounded-lg border-2 transition text-left ${
-                      formData.animationStyle === style.value
-                        ? "border-indigo-600 bg-indigo-50"
-                        : "border-gray-200 hover:border-indigo-300"
-                    }`}
-                  >
-                    <p className="font-semibold text-gray-900">{style.label}</p>
-                    <p className="text-sm text-gray-600">{style.desc}</p>
-                  </button>
-                ))}
-              </div>
+              <label className="block text-sm font-medium mb-2">Animation Style</label>
+              <Select value={formData.animationStyle} onValueChange={(value) => handleInputChange("animationStyle", value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cartoon">Cartoon</SelectItem>
+                  <SelectItem value="storybook">Storybook</SelectItem>
+                  <SelectItem value="magical">Magical</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-3">
-                Background Music Mood
-              </label>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {[
-                  { value: "playful", label: "Playful 🎉" },
-                  { value: "calm", label: "Calm 🧘" },
-                  { value: "adventurous", label: "Adventurous 🚀" },
-                ].map((mood) => (
-                  <button
-                    key={mood.value}
-                    onClick={() => handleInputChange("musicMood", mood.value)}
-                    className={`p-3 rounded-lg border-2 transition font-medium ${
-                      formData.musicMood === mood.value
-                        ? "border-indigo-600 bg-indigo-50"
-                        : "border-gray-200 hover:border-indigo-300"
-                    }`}
-                  >
-                    {mood.label}
-                  </button>
-                ))}
-              </div>
+              <label className="block text-sm font-medium mb-2">Music Mood</label>
+              <Select value={formData.musicMood} onValueChange={(value) => handleInputChange("musicMood", value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="playful">Playful</SelectItem>
+                  <SelectItem value="calm">Calm</SelectItem>
+                  <SelectItem value="adventurous">Adventurous</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-3">
-                Video Length
-              </label>
-              <div className="grid grid-cols-2 gap-4">
-                {[
-                  { value: "short", label: "Short (2 min)" },
-                  { value: "full", label: "Full (5 min)" },
-                ].map((length) => (
-                  <button
-                    key={length.value}
-                    onClick={() => handleInputChange("videoLength", length.value)}
-                    className={`p-3 rounded-lg border-2 transition font-medium ${
-                      formData.videoLength === length.value
-                        ? "border-indigo-600 bg-indigo-50"
-                        : "border-gray-200 hover:border-indigo-300"
-                    }`}
-                  >
-                    {length.label}
-                  </button>
-                ))}
-              </div>
+              <label className="block text-sm font-medium mb-2">Video Length</label>
+              <Select value={formData.videoLength} onValueChange={(value) => handleInputChange("videoLength", value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="short">Short (3-5 min)</SelectItem>
+                  <SelectItem value="full">Full (7-10 min)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
         );
 
       case 5:
         return (
-          <div className="space-y-6">
-            <h2 className="text-3xl font-bold text-gray-900">Review & Generate</h2>
-
-            <Card className="p-6 bg-blue-50 border-blue-200">
-              <p className="text-blue-900">
-                <strong>Summary:</strong> We'll generate a personalized 10-scene story for <strong>{formData.childName}</strong> ({formData.childAge} years old) about <strong>{formData.parentingChallenge}</strong> in <strong>{formData.language.toUpperCase()}</strong>.
-              </p>
+          <div className="space-y-4">
+            <h2 className="text-2xl font-bold">Generate My Video</h2>
+            <p className="text-gray-600">Review your story details and click below to generate the personalized video</p>
+            
+            <Card className="p-4 bg-blue-50">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="font-medium">Child Name:</p>
+                  <p>{formData.childName}</p>
+                </div>
+                <div>
+                  <p className="font-medium">Age:</p>
+                  <p>{formData.childAge}</p>
+                </div>
+                <div>
+                  <p className="font-medium">Language:</p>
+                  <p>{formData.language}</p>
+                </div>
+                <div>
+                  <p className="font-medium">Animation Style:</p>
+                  <p>{formData.animationStyle}</p>
+                </div>
+              </div>
             </Card>
 
-            {formData.storyScript && (
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Story Script Preview (10 scenes)
-                </label>
-                <Textarea
-                  value={formData.storyScript}
-                  onChange={(e) => handleInputChange("storyScript", e.target.value)}
-                  className="w-full min-h-48 text-sm font-mono"
-                />
-              </div>
-            )}
+            <Button
+              onClick={handleGenerateStory}
+              disabled={isGenerating}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-6 text-lg"
+            >
+              {isGenerating ? (
+                <>
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                  Generating Your Video...
+                </>
+              ) : (
+                "Generate My Video"
+              )}
+            </Button>
 
-            {!formData.storyScript && (
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                <p className="text-sm text-yellow-900">
-                  <strong>Ready to generate?</strong> Click "Generate Story" to create your personalized script. This may take a moment.
-                </p>
+            {formData.storyScript && (
+              <div className="mt-4 p-4 bg-gray-50 rounded">
+                <h3 className="font-bold mb-2">Story Script Preview</h3>
+                <pre className="text-xs overflow-auto max-h-64">{formData.storyScript}</pre>
               </div>
             )}
           </div>
@@ -527,61 +527,50 @@ export default function CreateStory() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-orange-50 py-12">
-      <div className="container max-w-2xl mx-auto px-4">
-        {/* Progress Bar */}
-        <div className="mb-8">
-          <div className="flex justify-between mb-4">
-            {[1, 2, 3, 4, 5].map((step) => (
-              <div
-                key={step}
-                className={`h-2 flex-1 rounded-full mx-1 transition ${
-                  step <= currentStep ? "bg-indigo-600" : "bg-gray-300"
-                }`}
-              />
-            ))}
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-8">
+      <div className="max-w-2xl mx-auto">
+        <Card className="p-8">
+          {/* Progress indicator */}
+          <div className="mb-8">
+            <div className="flex justify-between mb-2">
+              {[1, 2, 3, 4, 5].map((step) => (
+                <div
+                  key={step}
+                  className={`h-2 flex-1 mx-1 rounded ${
+                    step <= currentStep ? "bg-blue-600" : "bg-gray-300"
+                  }`}
+                />
+              ))}
+            </div>
+            <p className="text-sm text-gray-600 text-center">Step {currentStep} of 5</p>
           </div>
-          <p className="text-sm text-gray-600 text-center">
-            Step {currentStep} of 5
-          </p>
-        </div>
 
-        {/* Content */}
-        <Card className="p-8 mb-8">
+          {/* Content */}
           {renderStep()}
+
+          {/* Navigation */}
+          <div className="flex gap-4 mt-8">
+            <Button
+              onClick={handlePrev}
+              disabled={currentStep === 1}
+              variant="outline"
+              className="flex-1"
+            >
+              <ChevronLeft className="mr-2 h-4 w-4" />
+              Previous
+            </Button>
+
+            {currentStep < 5 ? (
+              <Button
+                onClick={handleNext}
+                className="flex-1 bg-blue-600 hover:bg-blue-700"
+              >
+                Next
+                <ChevronRight className="ml-2 h-4 w-4" />
+              </Button>
+            ) : null}
+          </div>
         </Card>
-
-        {/* Navigation */}
-        <div className="flex gap-4 justify-between">
-          <Button
-            variant="outline"
-            onClick={handlePrev}
-            disabled={currentStep === 1}
-            className="flex items-center gap-2"
-          >
-            <ChevronLeft className="h-4 w-4" />
-            Previous
-          </Button>
-
-          {currentStep === 5 ? (
-            <Button
-              onClick={handleGenerateStory}
-              disabled={isGenerating || !!formData.storyScript}
-              className="bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white flex items-center gap-2"
-            >
-              {isGenerating && <Loader2 className="h-4 w-4 animate-spin" />}
-              {isGenerating ? "Generating..." : formData.storyScript ? "Story Generated!" : "Generate My Video"}
-            </Button>
-          ) : (
-            <Button
-              onClick={handleNext}
-              className="flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white"
-            >
-              Next
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          )}
-        </div>
       </div>
     </div>
   );

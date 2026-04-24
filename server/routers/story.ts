@@ -24,43 +24,51 @@ const StorySceneSchema = z.object({
 export const storyRouter = router({
   /**
    * Create a new story order
+   * Expects childPhotoUrl to be a valid storage URL (not base64)
    */
   create: protectedProcedure
     .input(
       z.object({
-        childName: z.string().min(1),
+        childName: z.string().min(1).max(255),
         childAge: z.number().min(2).max(10),
         childGender: z.enum(["male", "female", "other"]),
-        childPhotoUrl: z.string().optional(),
+        childPhotoUrl: z.string().optional(), // Storage URL only
         childPhotoKey: z.string().optional(),
-        language: z.enum(["en", "hi", "hinglish"]),
-        parentingChallenge: z.string().min(10),
-        childPersonality: z.string().optional(),
-        animationStyle: z.enum(["cartoon", "storybook", "magical"]),
-        musicMood: z.enum(["playful", "calm", "adventurous"]),
-        videoLength: z.enum(["short", "full"]),
+        language: z.enum(["en", "hi", "hinglish"]).default("en"),
+        parentingChallenge: z.string().min(10).max(2000),
+        childPersonality: z.string().max(1000).optional(),
+        animationStyle: z.enum(["cartoon", "storybook", "magical"]).default("cartoon"),
+        musicMood: z.enum(["playful", "calm", "adventurous"]).default("playful"),
+        videoLength: z.enum(["short", "full"]).default("full"),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const storyOrder = await createStoryOrder({
-        userId: ctx.user.id,
-        childName: input.childName,
-        childAge: input.childAge,
-        childGender: input.childGender,
-        childPhotoUrl: input.childPhotoUrl,
-        childPhotoKey: input.childPhotoKey,
-        language: input.language,
-        parentingChallenge: input.parentingChallenge,
-        childPersonality: input.childPersonality,
-        animationStyle: input.animationStyle,
-        musicMood: input.musicMood,
-        videoLength: input.videoLength,
-        renderStatus: "pending",
-        paymentStatus: "pending",
-        pricingTier: "preview",
-      });
+      try {
+        // Sanitize and prepare inputs
+        const storyOrder = await createStoryOrder({
+          userId: ctx.user.id,
+          childName: input.childName.trim(),
+          childAge: input.childAge,
+          childGender: input.childGender,
+          childPhotoUrl: input.childPhotoUrl || null,
+          childPhotoKey: input.childPhotoKey || null,
+          language: input.language,
+          parentingChallenge: input.parentingChallenge.trim(),
+          childPersonality: input.childPersonality ? input.childPersonality.trim() : null,
+          animationStyle: input.animationStyle,
+          musicMood: input.musicMood,
+          videoLength: input.videoLength,
+          renderStatus: "pending",
+          paymentStatus: "pending",
+          pricingTier: "preview",
+        });
 
-      return storyOrder;
+        return storyOrder;
+      } catch (error) {
+        console.error("[Story] Failed to create story order:", error);
+        // Don't expose database errors to frontend
+        throw new Error("Unable to create your video. Please try again.");
+      }
     }),
 
   /**
@@ -84,7 +92,7 @@ export const storyRouter = router({
   }),
 
   /**
-   * Generate AI story script (10 scenes)
+   * Generate story script using LLM
    */
   generateScript: protectedProcedure
     .input(
@@ -99,116 +107,96 @@ export const storyRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Verify ownership
-      const story = await getStoryOrderById(input.storyOrderId);
-      if (!story || story.userId !== ctx.user.id) {
-        throw new Error("Unauthorized");
-      }
-
-      // Build character list
-      const characterList = input.characterNames?.join(", ") || "no additional characters";
-
-      // Create prompt for GPT-4
-      const systemPrompt = `You are a child psychologist and master storyteller. Create a 10-scene children's story that naturally teaches an important lesson without being preachy. The story should be engaging, age-appropriate, and feature the child as the hero.`;
-
-      const userPrompt = `Create a 10-scene story for a ${input.childAge}-year-old child named ${input.childName} who is experiencing this challenge: "${input.parentingChallenge}". 
-${input.childPersonality ? `Additional context about the child: ${input.childPersonality}` : ""}
-Supporting characters: ${characterList}
-Language: ${input.language}
-
-Return a JSON array of exactly 10 scenes. Each scene must have:
-- sceneNumber (1-10)
-- narration (50 words max, in ${input.language})
-- visualDescription (for image generation, descriptive)
-- characterAction (what the character does)
-- hiddenLesson (the lesson being taught)
-
-Format as valid JSON array only, no markdown or extra text.`;
-
       try {
+        // Verify story ownership
+        const story = await getStoryOrderById(input.storyOrderId);
+        if (!story || story.userId !== ctx.user.id) {
+          throw new Error("Story not found or unauthorized");
+        }
+
+        // Create prompt for LLM
+        const characterContext = input.characterNames?.length
+          ? `Supporting characters: ${input.characterNames.join(", ")}`
+          : "";
+
+        const prompt = `You are a children's story writer specializing in addressing parenting challenges through engaging narratives.
+
+Create a 10-scene story in JSON format for a ${input.childAge}-year-old child named ${input.childName}.
+
+Parenting Challenge: ${input.parentingChallenge}
+Child Personality: ${input.childPersonality || "Not specified"}
+${characterContext}
+Language: ${input.language === "hi" ? "Hindi" : input.language === "hinglish" ? "Hinglish (Hindi-English mix)" : "English"}
+
+Each scene must have exactly these fields:
+- sceneNumber: number (1-10)
+- narration: string (the voiceover text for this scene, in ${input.language === "hi" ? "Hindi" : input.language === "hinglish" ? "Hinglish" : "English"})
+- visualDescription: string (detailed visual description for image generation)
+- characterAction: string (what the main character is doing)
+- hiddenLesson: string (the underlying lesson being taught)
+
+Return ONLY valid JSON array of 10 scenes. No markdown, no code blocks, just pure JSON.`;
+
         const response = await invokeLLM({
           messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
+            {
+              role: "system",
+              content: "You are a JSON generator. Return only valid JSON, no markdown or explanations.",
+            },
+            {
+              role: "user",
+              content: prompt,
+            },
           ],
         });
 
-        const content = response.choices[0]?.message?.content;
-        const scriptText = typeof content === "string" ? content : "[]";
-        const scenes = JSON.parse(scriptText);
+        // Parse response
+        const messageContent = response.choices[0]?.message?.content;
+        if (!messageContent) {
+          throw new Error("No response from LLM");
+        }
 
-        // Validate the script structure
-        const validatedScenes = z.array(StorySceneSchema).parse(scenes);
+        // Handle both string and array content types
+        let content = typeof messageContent === "string" ? messageContent : "";
+        if (Array.isArray(messageContent)) {
+          const textContent = messageContent.find((c: any) => c.type === "text") as any;
+          content = textContent?.text || "";
+        }
 
-        // Update story with script
-        await updateStoryOrder(input.storyOrderId, {
-          storyScript: JSON.stringify(validatedScenes),
-          renderStatus: "generating_images",
+        if (!content) {
+          throw new Error("No text content in LLM response");
+        }
+
+        // Clean up response - remove markdown code blocks if present
+        let jsonString = content;
+        if (jsonString.includes("```json")) {
+          jsonString = jsonString.split("```json")[1].split("```")[0];
+        } else if (jsonString.includes("```")) {
+          jsonString = jsonString.split("```")[1].split("```")[0];
+        }
+
+        const scenes = JSON.parse(jsonString.trim());
+
+        // Validate scenes
+        if (!Array.isArray(scenes) || scenes.length !== 10) {
+          throw new Error("Invalid scene count");
+        }
+
+        scenes.forEach((scene, index) => {
+          StorySceneSchema.parse(scene);
         });
 
-        return validatedScenes;
+        // Save script to database
+        await updateStoryOrder(input.storyOrderId, {
+          storyScript: JSON.stringify(scenes),
+          renderStatus: "pending",
+        });
+
+        return scenes;
       } catch (error) {
-        console.error("Script generation error:", error);
-        await updateStoryOrder(input.storyOrderId, {
-          renderStatus: "failed",
-        });
-        throw new Error("Failed to generate story script");
+        console.error("[Story] Failed to generate script:", error);
+        throw new Error("Unable to generate story script. Please try again.");
       }
-    }),
-
-  /**
-   * Start video rendering job
-   */
-  startRender: protectedProcedure
-    .input(
-      z.object({
-        storyOrderId: z.number(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      // Verify ownership
-      const story = await getStoryOrderById(input.storyOrderId);
-      if (!story || story.userId !== ctx.user.id) {
-        throw new Error("Unauthorized");
-      }
-
-      if (!story.storyScript) {
-        throw new Error("Story script not generated yet");
-      }
-
-      const jobId = nanoid();
-
-      // Create render job
-      await createRenderJob({
-        storyOrderId: input.storyOrderId,
-        jobId,
-        status: "queued",
-        progress: 0,
-        currentStep: "pending",
-      });
-
-      // Update story order with job ID
-      await updateStoryOrder(input.storyOrderId, {
-        renderJobId: jobId,
-        renderStatus: "generating_images",
-      });
-
-      // TODO: Queue async video rendering job (e.g., with Bull/BullMQ or similar)
-      // For now, just return the job ID
-      return { jobId };
-    }),
-
-  /**
-   * Get render job status
-   */
-  getRenderStatus: protectedProcedure
-    .input(z.object({ jobId: z.string() }))
-    .query(async ({ input }) => {
-      const job = await getRenderJobByJobId(input.jobId);
-      if (!job) {
-        throw new Error("Job not found");
-      }
-      return job;
     }),
 
   /**
@@ -223,18 +211,23 @@ Format as valid JSON array only, no markdown or extra text.`;
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Verify ownership
-      const story = await getStoryOrderById(input.storyOrderId);
-      if (!story || story.userId !== ctx.user.id) {
-        throw new Error("Unauthorized");
+      try {
+        // Verify story ownership
+        const story = await getStoryOrderById(input.storyOrderId);
+        if (!story || story.userId !== ctx.user.id) {
+          throw new Error("Story not found or unauthorized");
+        }
+
+        await createStoryFeedback({
+          storyOrderId: input.storyOrderId,
+          feedbackType: input.feedbackType,
+          notes: input.notes,
+        });
+
+        return { success: true };
+      } catch (error) {
+        console.error("[Story] Failed to submit feedback:", error);
+        throw new Error("Unable to submit feedback. Please try again.");
       }
-
-      const feedback = await createStoryFeedback({
-        storyOrderId: input.storyOrderId,
-        feedbackType: input.feedbackType,
-        notes: input.notes,
-      });
-
-      return feedback;
     }),
 });

@@ -105,10 +105,34 @@ export async function getUserByOpenId(openId: string) {
 export async function createStoryOrder(order: InsertStoryOrder) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(storyOrders).values(order);
-  // Get the inserted record
-  const inserted = await db.select().from(storyOrders).where(eq(storyOrders.userId, order.userId)).orderBy(storyOrders.id).limit(1);
-  return inserted[0] || { id: 0 };
+
+  try {
+    // Sanitize inputs at database layer
+    const sanitized: InsertStoryOrder = {
+      ...order,
+      childName: (order.childName || "").trim(),
+      parentingChallenge: (order.parentingChallenge || "").trim(),
+      childPersonality: order.childPersonality ? order.childPersonality.trim() : null,
+      childPhotoUrl: order.childPhotoUrl || null,
+      childPhotoKey: order.childPhotoKey || null,
+    };
+
+    // Insert the record
+    await db.insert(storyOrders).values(sanitized);
+
+    // Get the most recently inserted record for this user
+    const inserted = await db
+      .select()
+      .from(storyOrders)
+      .where(eq(storyOrders.userId, order.userId))
+      .orderBy(storyOrders.createdAt)
+      .limit(1);
+
+    return inserted[0] || { id: 0 };
+  } catch (error) {
+    console.error("[DB] createStoryOrder failed:", error);
+    throw error;
+  }
 }
 
 export async function getStoryOrderById(id: number) {
