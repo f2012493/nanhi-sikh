@@ -1,9 +1,8 @@
 import { generateImage } from "./imageGeneration";
-import { transcribeAudio } from "./voiceTranscription";
-import { invokeLLM } from "./llm";
-import { storagePut } from "../storage";
-import { execSync } from "child_process";
+import { storagePut, storageGetSignedUrl } from "../storage";
+import { spawnSync } from "child_process";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 
 /**
@@ -32,30 +31,22 @@ export interface FinalVideoConfig {
   childPhotoUrl?: string;
 }
 
+interface RenderedScene {
+  sceneNumber: number;
+  imageUrl: string;
+  durationSeconds: number;
+}
+
+const SCENE_DURATION_FALLBACK_SECONDS = 5;
+
 /**
- * Generate text-to-speech audio for narration
- * Mock implementation - replace with real ElevenLabs API
+ * Estimate narration duration from word count (~2.5 words/sec).
+ * Used as the on-screen time per scene since real TTS is not yet wired up.
  */
-async function generateNarrationAudio(
-  text: string,
-  language: "en" | "hi",
-  childName: string
-): Promise<{ audioUrl: string; durationSeconds: number }> {
-  console.log(
-    `[FinalVideoRenderer] Generating narration audio for: "${text.substring(0, 50)}..."`
-  );
-
-  // Mock implementation - estimate duration based on text length
-  // Real implementation would use ElevenLabs or similar TTS API
-  const estimatedDuration = Math.ceil(text.split(" ").length / 2.5); // ~2.5 words per second
-
-  // For now, return a mock URL
-  const mockAudioUrl = `/manus-storage/audio-${Date.now()}.mp3`;
-
-  return {
-    audioUrl: mockAudioUrl,
-    durationSeconds: estimatedDuration,
-  };
+function estimateNarrationDuration(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  if (words === 0) return SCENE_DURATION_FALLBACK_SECONDS;
+  return Math.max(3, Math.ceil(words / 2.5));
 }
 
 /**
@@ -69,46 +60,41 @@ async function generateSceneImage(
     `[FinalVideoRenderer] Generating image for scene ${scene.sceneNumber}`
   );
 
-  // Create a detailed prompt that includes animation style and child context
-  const prompt = `
-    Create a ${config.animationStyle} style illustration for a children's story.
-    
-    Scene: ${scene.visualDescription}
-    Action: ${scene.characterAction}
-    Child's name: ${config.childName}
-    Child's age: ${config.childAge}
-    
-    Style: ${config.animationStyle === "cartoon" ? "bright, colorful cartoon" : config.animationStyle === "storybook" ? "watercolor storybook illustration" : "magical, enchanted forest style"}
-    
-    Make it engaging and age-appropriate for a ${config.childAge}-year-old.
-    Include the child ${config.childName} as the main character if possible.
-  `;
+  const styleHint =
+    config.animationStyle === "cartoon"
+      ? "bright, colorful cartoon"
+      : config.animationStyle === "storybook"
+        ? "watercolor storybook illustration"
+        : "magical, enchanted forest style";
 
-  try {
-    const result = await generateImage({
-      prompt,
-      originalImages: config.childPhotoUrl
-        ? [
-            {
-              url: config.childPhotoUrl,
-              mimeType: "image/jpeg",
-            },
-          ]
-        : undefined,
-    });
+  const prompt = `Create a ${config.animationStyle} style illustration for a children's story.
 
-    const imageUrl = result.url || `/manus-storage/scene-${scene.sceneNumber}-${Date.now()}.png`;
-    console.log(
-      `[FinalVideoRenderer] Scene ${scene.sceneNumber} image generated: ${imageUrl}`
+Scene: ${scene.visualDescription}
+Action: ${scene.characterAction}
+Child's name: ${config.childName}
+Child's age: ${config.childAge}
+
+Style: ${styleHint}
+Make it engaging and age-appropriate for a ${config.childAge}-year-old.
+Include the child ${config.childName} as the main character if possible.`;
+
+  const result = await generateImage({
+    prompt,
+    originalImages: config.childPhotoUrl
+      ? [{ url: config.childPhotoUrl, mimeType: "image/jpeg" }]
+      : undefined,
+  });
+
+  if (!result.url) {
+    throw new Error(
+      `Image generation returned no URL for scene ${scene.sceneNumber}`
     );
-    return imageUrl;
-  } catch (error) {
-    console.error(
-      `[FinalVideoRenderer] Failed to generate image for scene ${scene.sceneNumber}:`,
-      error
-    );
-    throw error;
   }
+
+  console.log(
+    `[FinalVideoRenderer] Scene ${scene.sceneNumber} image generated: ${result.url}`
+  );
+  return result.url;
 }
 
 /**
@@ -116,32 +102,23 @@ async function generateSceneImage(
  */
 async function createIntroScreen(
   config: FinalVideoConfig
-): Promise<{ imageUrl: string; durationSeconds: number }> {
+): Promise<RenderedScene> {
   console.log("[FinalVideoRenderer] Creating intro title screen");
 
-  const prompt = `
-    Create a beautiful, child-friendly title screen for a story called "The Adventure of ${config.childName}".
-    
-    Style: ${config.animationStyle} style
-    Include:
-    - Large, colorful title text: "The Adventure of ${config.childName}"
-    - Magical, welcoming background
-    - Animated feel appropriate for children aged ${config.childAge}
-    
-    Make it engaging and set the tone for an exciting story.
-  `;
+  const prompt = `Create a beautiful, child-friendly title screen for a story called "The Adventure of ${config.childName}".
 
-  try {
-    const result = await generateImage({ prompt });
-    const imageUrl = result.url || `/manus-storage/intro-${Date.now()}.png`;
-    return {
-      imageUrl,
-      durationSeconds: 3, // 3 seconds for intro
-    };
-  } catch (error) {
-    console.error("[FinalVideoRenderer] Failed to create intro screen:", error);
-    throw error;
-  }
+Style: ${config.animationStyle} style.
+Include large, colorful title text "The Adventure of ${config.childName}" on a magical, welcoming background.
+Animated feel appropriate for children aged ${config.childAge}.`;
+
+  const result = await generateImage({ prompt });
+  if (!result.url) throw new Error("Image generation returned no URL for intro screen");
+
+  return {
+    sceneNumber: 0,
+    imageUrl: result.url,
+    durationSeconds: 3,
+  };
 }
 
 /**
@@ -150,104 +127,140 @@ async function createIntroScreen(
 async function createEndScreen(
   config: FinalVideoConfig,
   scenes: StoryScene[]
-): Promise<{ imageUrl: string; durationSeconds: number }> {
+): Promise<RenderedScene> {
   console.log("[FinalVideoRenderer] Creating end screen with lesson summary");
 
-  // Combine all hidden lessons
   const lessons = scenes.map((s) => s.hiddenLesson).join(", ");
+  const prompt = `Create a beautiful, child-friendly end screen for a story.
 
-  const prompt = `
-    Create a beautiful, child-friendly end screen for a story.
-    
-    Title: "The End"
-    Subtitle: "What did we learn?"
-    Key lessons: ${lessons}
-    
-    Style: ${config.animationStyle} style
-    Include:
-    - Celebratory, happy atmosphere
-    - Stars, confetti, or magical elements
-    - Appropriate for children aged ${config.childAge}
-    
-    Make it feel rewarding and educational.
-  `;
+Title: "The End"
+Subtitle: "What did we learn?"
+Key lessons: ${lessons}
 
-  try {
-    const result = await generateImage({ prompt });
-    const imageUrl = result.url || `/manus-storage/end-screen-${Date.now()}.png`;
-    return {
-      imageUrl,
-      durationSeconds: 4, // 4 seconds for end screen
-    };
-  } catch (error) {
-    console.error("[FinalVideoRenderer] Failed to create end screen:", error);
-    throw error;
-  }
+Style: ${config.animationStyle} style.
+Celebratory, happy atmosphere with stars, confetti, or magical elements.
+Appropriate for children aged ${config.childAge}.`;
+
+  const result = await generateImage({ prompt });
+  if (!result.url) throw new Error("Image generation returned no URL for end screen");
+
+  return {
+    sceneNumber: scenes.length + 1,
+    imageUrl: result.url,
+    durationSeconds: 4,
+  };
 }
 
 /**
- * Generate background music (mock implementation)
+ * Resolve a storage URL (either a `/manus-storage/<key>` proxy path or a
+ * fully-qualified URL) to something fetch() can download directly.
  */
-async function generateBackgroundMusic(
-  mood: "playful" | "calm" | "adventurous",
-  durationSeconds: number
-): Promise<string> {
-  console.log(
-    `[FinalVideoRenderer] Generating ${mood} background music for ${durationSeconds} seconds`
-  );
-
-  // Mock implementation - return a placeholder URL
-  // Real implementation would use a music generation API or library
-  return `/manus-storage/music-${mood}-${Date.now()}.mp3`;
+async function resolveStorageUrl(url: string): Promise<string> {
+  if (url.startsWith("/manus-storage/")) {
+    const key = url.slice("/manus-storage/".length);
+    return storageGetSignedUrl(key);
+  }
+  return url;
 }
 
-/**
- * Stitch scenes together into final video using FFmpeg
- */
-async function stitchVideoWithFFmpeg(
-  scenes: Array<{
-    imageUrl: string;
-    audioUrl: string;
-    durationSeconds: number;
-  }>,
-  backgroundMusicUrl: string,
-  outputPath: string
-): Promise<void> {
-  console.log(
-    `[FinalVideoRenderer] Stitching ${scenes.length} scenes into video`
-  );
-
-  // Create FFmpeg concat demux file
-  const concatFile = path.join(path.dirname(outputPath), "concat.txt");
-  let concatContent = "";
-
-  for (const scene of scenes) {
-    // Download images and audio files locally
-    // For now, use placeholder paths
-    concatContent += `file '${scene.imageUrl}'\nduration ${scene.durationSeconds}\n`;
-  }
-
-  fs.writeFileSync(concatFile, concatContent);
-
-  // Build FFmpeg command
-  // This is a simplified version - real implementation would need proper file handling
-  const ffmpegCmd = `
-    ffmpeg -f concat -safe 0 -i ${concatFile} \
-      -c:v libx264 -pix_fmt yuv420p \
-      -c:a aac -b:a 128k \
-      -y ${outputPath}
-  `;
-
-  console.log(`[FinalVideoRenderer] Running FFmpeg: ${ffmpegCmd}`);
-
-  try {
-    // Note: This is a mock - real implementation needs proper file downloads
-    console.log(
-      "[FinalVideoRenderer] FFmpeg processing (mock) - would stitch scenes in production"
+async function downloadToFile(url: string, destPath: string): Promise<void> {
+  const resolved = await resolveStorageUrl(url);
+  const response = await fetch(resolved);
+  if (!response.ok) {
+    throw new Error(
+      `Failed to download asset ${url} (${response.status} ${response.statusText})`
     );
-  } catch (error) {
-    console.error("[FinalVideoRenderer] FFmpeg error:", error);
-    throw error;
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length === 0) {
+    throw new Error(`Downloaded asset ${url} is empty`);
+  }
+  fs.writeFileSync(destPath, buffer);
+}
+
+/**
+ * Verify ffmpeg is installed and callable. Throws a user-friendly error if not.
+ */
+function ensureFfmpegAvailable(): void {
+  const probe = spawnSync("ffmpeg", ["-version"], { encoding: "utf8" });
+  if (probe.error || probe.status !== 0) {
+    throw new Error(
+      "ffmpeg is not installed or not on PATH. Install ffmpeg on the server to enable final video rendering."
+    );
+  }
+}
+
+/**
+ * Stitch scene images into a slideshow MP4 using FFmpeg's concat demuxer.
+ * Audio narration/music is intentionally omitted for now: the upstream TTS and
+ * music generators are placeholders, so wiring fake audio paths into ffmpeg
+ * would only cause spurious failures. The video is silent until those land.
+ */
+function stitchVideoWithFFmpeg(
+  localImagePaths: Array<{ filePath: string; durationSeconds: number }>,
+  outputPath: string,
+  workDir: string
+): void {
+  if (localImagePaths.length === 0) {
+    throw new Error("Cannot render video: no scenes provided");
+  }
+
+  const concatFile = path.join(workDir, "concat.txt");
+
+  // FFmpeg concat demuxer requires each entry as `file '<path>'` followed by
+  // `duration <seconds>`. The final image must be repeated without a duration
+  // for the last frame to be honored — see ffmpeg concat demuxer docs.
+  const lines: string[] = [];
+  for (const { filePath, durationSeconds } of localImagePaths) {
+    lines.push(`file '${filePath.replace(/'/g, "'\\''")}'`);
+    lines.push(`duration ${durationSeconds}`);
+  }
+  const last = localImagePaths[localImagePaths.length - 1];
+  lines.push(`file '${last.filePath.replace(/'/g, "'\\''")}'`);
+
+  fs.writeFileSync(concatFile, lines.join("\n"));
+
+  const args = [
+    "-y",
+    "-f", "concat",
+    "-safe", "0",
+    "-i", concatFile,
+    "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+    "-r", "30",
+    "-c:v", "libx264",
+    "-preset", "veryfast",
+    "-pix_fmt", "yuv420p",
+    "-movflags", "+faststart",
+    outputPath,
+  ];
+
+  console.log(`[FinalVideoRenderer] Running ffmpeg ${args.join(" ")}`);
+  const result = spawnSync("ffmpeg", args, {
+    encoding: "utf8",
+    timeout: 5 * 60 * 1000,
+    maxBuffer: 32 * 1024 * 1024,
+  });
+
+  if (result.error) {
+    throw new Error(`ffmpeg invocation failed: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    const stderrTail = (result.stderr || "").split("\n").slice(-20).join("\n");
+    throw new Error(
+      `ffmpeg exited with code ${result.status}. stderr (tail):\n${stderrTail}`
+    );
+  }
+
+  if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
+    throw new Error("ffmpeg reported success but produced no output file");
+  }
+}
+
+function safeRmDir(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (err) {
+    console.warn(`[FinalVideoRenderer] Failed to clean up ${dir}:`, err);
   }
 }
 
@@ -261,66 +274,46 @@ export async function generateFinalVideo(
     `[FinalVideoRenderer] Starting final video generation for story ${config.storyId}`
   );
 
+  ensureFfmpegAvailable();
+
+  const workDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), `final-video-${config.storyId}-`)
+  );
+  const outputPath = path.join(workDir, "output.mp4");
+
   try {
-    // Step 1: Generate intro screen
-    console.log("[FinalVideoRenderer] Step 1/5: Creating intro screen");
+    console.log("[FinalVideoRenderer] Step 1/4: Creating intro screen");
     const intro = await createIntroScreen(config);
 
-    // Step 2: Generate scene images and audio
-    console.log("[FinalVideoRenderer] Step 2/5: Generating scenes and narration");
-    const sceneAssets = await Promise.all(
-      config.scenes.map(async (scene) => {
-        const [imageUrl, { audioUrl, durationSeconds }] = await Promise.all([
-          generateSceneImage(config, scene),
-          generateNarrationAudio(scene.narration, config.language, config.childName),
-        ]);
+    console.log("[FinalVideoRenderer] Step 2/4: Generating scene images");
+    const sceneAssets: RenderedScene[] = [];
+    for (const scene of config.scenes) {
+      const imageUrl = await generateSceneImage(config, scene);
+      sceneAssets.push({
+        sceneNumber: scene.sceneNumber,
+        imageUrl,
+        durationSeconds: estimateNarrationDuration(scene.narration),
+      });
+    }
 
-        return {
-          sceneNumber: scene.sceneNumber,
-          imageUrl,
-          audioUrl,
-          durationSeconds,
-        };
-      })
-    );
-
-    // Step 3: Generate end screen
-    console.log("[FinalVideoRenderer] Step 3/5: Creating end screen");
+    console.log("[FinalVideoRenderer] Step 3/4: Creating end screen");
     const endScreen = await createEndScreen(config, config.scenes);
 
-    // Step 4: Generate background music
-    console.log("[FinalVideoRenderer] Step 4/5: Generating background music");
-    const totalDuration =
-      intro.durationSeconds +
-      sceneAssets.reduce((sum, s) => sum + s.durationSeconds, 0) +
-      endScreen.durationSeconds;
-    const backgroundMusicUrl = await generateBackgroundMusic(
-      config.musicMood,
-      totalDuration
+    const allScenes: RenderedScene[] = [intro, ...sceneAssets, endScreen];
+
+    console.log(
+      `[FinalVideoRenderer] Step 4/4: Downloading ${allScenes.length} images and rendering video`
     );
+    const localImagePaths: Array<{ filePath: string; durationSeconds: number }> = [];
+    for (let i = 0; i < allScenes.length; i++) {
+      const scene = allScenes[i];
+      const filePath = path.join(workDir, `scene-${String(i).padStart(3, "0")}.png`);
+      await downloadToFile(scene.imageUrl, filePath);
+      localImagePaths.push({ filePath, durationSeconds: scene.durationSeconds });
+    }
 
-    // Step 5: Stitch everything together
-    console.log("[FinalVideoRenderer] Step 5/5: Rendering final video");
-    const outputPath = `/tmp/final-video-${config.storyId}.mp4`;
+    stitchVideoWithFFmpeg(localImagePaths, outputPath, workDir);
 
-    // Combine all scenes for stitching
-    const allScenes = [
-      {
-        imageUrl: intro.imageUrl,
-        audioUrl: backgroundMusicUrl, // Intro uses background music
-        durationSeconds: intro.durationSeconds,
-      },
-      ...sceneAssets,
-      {
-        imageUrl: endScreen.imageUrl,
-        audioUrl: backgroundMusicUrl, // End screen uses background music
-        durationSeconds: endScreen.durationSeconds,
-      },
-    ];
-
-    await stitchVideoWithFFmpeg(allScenes, backgroundMusicUrl, outputPath);
-
-    // Step 6: Upload to storage
     console.log("[FinalVideoRenderer] Uploading final video to storage");
     const videoBuffer = fs.readFileSync(outputPath);
     const { url: videoUrl, key: videoKey } = await storagePut(
@@ -329,21 +322,16 @@ export async function generateFinalVideo(
       "video/mp4"
     );
 
-    // Clean up temporary files
-    fs.unlinkSync(outputPath);
-    fs.unlinkSync(path.join(path.dirname(outputPath), "concat.txt"));
-
     console.log(
       `[FinalVideoRenderer] Final video generation complete: ${videoUrl}`
     );
 
-    return {
-      videoUrl,
-      videoKey,
-    };
+    return { videoUrl, videoKey };
   } catch (error) {
     console.error("[FinalVideoRenderer] Error generating final video:", error);
     throw error;
+  } finally {
+    safeRmDir(workDir);
   }
 }
 
@@ -351,31 +339,32 @@ export async function generateFinalVideo(
  * Parse story JSON and extract scenes
  */
 export function parseStoryJSON(storyJsonString: string): StoryScene[] {
+  let parsed: unknown;
   try {
-    const scenes = JSON.parse(storyJsonString);
-
-    if (!Array.isArray(scenes)) {
-      throw new Error("Story JSON must be an array of scenes");
-    }
-
-    // Validate scene structure
-    for (const scene of scenes) {
-      if (
-        !scene.sceneNumber ||
-        !scene.narration ||
-        !scene.visualDescription ||
-        !scene.characterAction ||
-        !scene.hiddenLesson
-      ) {
-        throw new Error(
-          `Invalid scene structure at scene ${scene.sceneNumber || "unknown"}`
-        );
-      }
-    }
-
-    return scenes;
+    parsed = JSON.parse(storyJsonString);
   } catch (error) {
-    console.error("[FinalVideoRenderer] Error parsing story JSON:", error);
-    throw new Error(`Failed to parse story JSON: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Failed to parse story JSON: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error("Story JSON must be an array of scenes");
+  }
+
+  for (const scene of parsed as StoryScene[]) {
+    if (
+      !scene.sceneNumber ||
+      !scene.narration ||
+      !scene.visualDescription ||
+      !scene.characterAction ||
+      !scene.hiddenLesson
+    ) {
+      throw new Error(
+        `Invalid scene structure at scene ${scene.sceneNumber || "unknown"}`
+      );
+    }
+  }
+
+  return parsed as StoryScene[];
 }
