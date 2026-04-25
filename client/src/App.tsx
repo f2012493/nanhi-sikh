@@ -8,6 +8,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import CreateStory from "./pages/CreateStory";
 import StoryScriptReview from "./pages/StoryScriptReview";
+import VideoPreview from "./pages/VideoPreview";
 import Dashboard from "./pages/Dashboard";
 import Pricing from "./pages/Pricing";
 import Privacy from "./pages/Privacy";
@@ -21,6 +22,7 @@ function Router() {
       <Route path={"/"} component={Home} />
       <Route path={"/create-story"} component={CreateStory} />
       <Route path={"/story-review/:storyId"} component={StoryScriptReview} />
+      <Route path={"/video-preview/:jobId"} component={VideoPreview} />
       <Route path={"/dashboard"} component={Dashboard} />
       <Route path={"/pricing"} component={Pricing} />
       <Route path={"/privacy"} component={Privacy} />
