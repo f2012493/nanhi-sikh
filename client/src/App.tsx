@@ -7,6 +7,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import CreateStory from "./pages/CreateStory";
+import StoryScriptReview from "./pages/StoryScriptReview";
 import Dashboard from "./pages/Dashboard";
 import Pricing from "./pages/Pricing";
 import Privacy from "./pages/Privacy";
@@ -19,6 +20,7 @@ function Router() {
     <Switch>
       <Route path={"/"} component={Home} />
       <Route path={"/create-story"} component={CreateStory} />
+      <Route path={"/story-review/:storyId"} component={StoryScriptReview} />
       <Route path={"/dashboard"} component={Dashboard} />
       <Route path={"/pricing"} component={Pricing} />
       <Route path={"/privacy"} component={Privacy} />

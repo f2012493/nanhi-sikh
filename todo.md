@@ -325,3 +325,41 @@ Production build verified ✅
 - [x] Fix frontend error handling to show user-friendly messages
 - [x] Apply database migration to add final video fields
 - [x] All tests passing (14/14) after migration
+
+
+## Critical Bug Fixes - Story Script Review & Video Generation Flow
+
+- [x] Create StoryScriptReview page for reviewing and customizing generated story script
+  * Display story JSON with all 10 scenes in readable format
+  * Show scene-by-scene breakdown with narration, visual description, character action, lesson
+  * Allow editing of individual scene narration and descriptions
+  * Preview changes in real-time
+  * Customize animation style and music mood before video generation
+  * "Proceed to Video Generation" button to start final video creation
+
+- [x] Update CreateStory page to navigate to StoryScriptReview after script generation
+  * After generateScript API call succeeds, redirect to review page
+  * Pass storyOrderId to review page
+  * Show loading state while script is being generated
+
+- [x] Implement script editing functionality
+  * Allow users to edit narration text for each scene
+  * Allow users to edit visual descriptions
+  * Validate edited content before submission
+  * Save edited script back to database
+
+- [x] Create video generation flow from review page
+  * "Create Final Video" button that starts video generation
+  * Navigate to video preview page after generation starts
+  * Show real-time progress with 5-stage indicators
+  * Handle errors gracefully with retry option
+
+- [x] Add navigation flow
+  * CreateStory → StoryScriptReview → VideoPreview → Dashboard
+  * Proper back button navigation
+  * Prevent going back after video generation starts
+
+- [ ] Test complete user flow end-to-end
+  * Create story → Generate script → Review script → Generate video → Preview video
+  * Test script editing functionality
+  * Test error handling at each step

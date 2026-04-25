@@ -207,13 +207,9 @@ export default function CreateStory() {
         characterNames: characterNames.length > 0 ? characterNames : undefined,
       });
 
-      setFormData((prev) => ({
-        ...prev,
-        storyScript: JSON.stringify(scriptResult, null, 2),
-      }));
-
+      // Navigate to story review page
       toast.success("Story script generated! Review and customize if needed.");
-      setCurrentStep(5);
+      navigate(`/story-review/${result.id}`);
     } catch (error: any) {
       // Show user-friendly error message
       const errorMessage = error.message || "Unable to create your video. Please try again.";
