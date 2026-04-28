@@ -40,7 +40,7 @@ async function generateNarrationAudio(
   text: string,
   language: "en" | "hi",
   childName: string
-): Promise<{ audioUrl: string; durationSeconds: number }> {
+): Promise<{ audioUrl: string | null; durationSeconds: number }> {
   console.log(
     `[FinalVideoRenderer] Generating narration audio for: "${text.substring(0, 50)}..."`
   );
@@ -49,11 +49,9 @@ async function generateNarrationAudio(
   // Real implementation would use ElevenLabs or similar TTS API
   const estimatedDuration = Math.ceil(text.split(" ").length / 2.5); // ~2.5 words per second
 
-  // For now, return a mock URL
-  const mockAudioUrl = `/manus-storage/audio-${Date.now()}.mp3`;
-
+  // Return null URL so stitching uses silence instead of a fake path
   return {
-    audioUrl: mockAudioUrl,
+    audioUrl: null,
     durationSeconds: estimatedDuration,
   };
 }
@@ -191,14 +189,40 @@ async function createEndScreen(
 async function generateBackgroundMusic(
   mood: "playful" | "calm" | "adventurous",
   durationSeconds: number
-): Promise<string> {
+): Promise<string | null> {
   console.log(
     `[FinalVideoRenderer] Generating ${mood} background music for ${durationSeconds} seconds`
   );
 
-  // Mock implementation - return a placeholder URL
-  // Real implementation would use a music generation API or library
-  return `/manus-storage/music-${mood}-${Date.now()}.mp3`;
+  // Return null - real implementation would use a music generation API
+  return null;
+}
+
+/**
+ * Resolve a possibly-relative /manus-storage URL to an absolute URL for fetching.
+ */
+function resolveStorageUrl(url: string): string {
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    return url;
+  }
+  const base = process.env.SERVER_BASE_URL || "http://localhost:3000";
+  return `${base}${url}`;
+}
+
+/**
+ * Download a remote URL to a local file. Returns false if download fails.
+ */
+async function downloadToFile(url: string, localPath: string): Promise<boolean> {
+  try {
+    const resolved = resolveStorageUrl(url);
+    const response = await fetch(resolved);
+    if (!response.ok) return false;
+    const buffer = Buffer.from(await response.arrayBuffer());
+    fs.writeFileSync(localPath, buffer);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -207,48 +231,65 @@ async function generateBackgroundMusic(
 async function stitchVideoWithFFmpeg(
   scenes: Array<{
     imageUrl: string;
-    audioUrl: string;
+    audioUrl: string | null;
     durationSeconds: number;
   }>,
-  backgroundMusicUrl: string,
+  backgroundMusicUrl: string | null,
   outputPath: string
 ): Promise<void> {
   console.log(
     `[FinalVideoRenderer] Stitching ${scenes.length} scenes into video`
   );
 
-  // Create FFmpeg concat demux file
-  const concatFile = path.join(path.dirname(outputPath), "concat.txt");
-  let concatContent = "";
+  const tempDir = path.dirname(outputPath);
+  const segmentPaths: string[] = [];
 
-  for (const scene of scenes) {
-    // Download images and audio files locally
-    // For now, use placeholder paths
-    concatContent += `file '${scene.imageUrl}'\nduration ${scene.durationSeconds}\n`;
+  for (let i = 0; i < scenes.length; i++) {
+    const scene = scenes[i];
+    const imagePath = path.join(tempDir, `scene-img-${i}.png`);
+    const segPath = path.join(tempDir, `segment-${i}.mp4`);
+
+    // Download scene image
+    const imageOk = await downloadToFile(scene.imageUrl, imagePath);
+    if (!imageOk) {
+      console.warn(`[FinalVideoRenderer] Skipping scene ${i}: image download failed (${scene.imageUrl})`);
+      continue;
+    }
+
+    // Try to download audio (optional)
+    let audioPath: string | null = null;
+    if (scene.audioUrl) {
+      const ap = path.join(tempDir, `scene-audio-${i}.mp3`);
+      if (await downloadToFile(scene.audioUrl, ap)) {
+        audioPath = ap;
+      }
+    }
+
+    // Build per-scene FFmpeg command
+    const videoFilter = "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,format=yuv420p";
+    let segCmd: string;
+    if (audioPath) {
+      segCmd = `ffmpeg -y -loop 1 -i "${imagePath}" -i "${audioPath}" -vf "${videoFilter}" -c:v libx264 -c:a aac -t ${scene.durationSeconds} -shortest "${segPath}"`;
+    } else {
+      segCmd = `ffmpeg -y -loop 1 -i "${imagePath}" -f lavfi -i anullsrc=r=44100:cl=stereo -vf "${videoFilter}" -c:v libx264 -c:a aac -t ${scene.durationSeconds} "${segPath}"`;
+    }
+
+    console.log(`[FinalVideoRenderer] Rendering segment ${i}`);
+    execSync(segCmd, { stdio: "pipe" });
+    segmentPaths.push(segPath);
   }
 
-  fs.writeFileSync(concatFile, concatContent);
-
-  // Build FFmpeg command
-  // This is a simplified version - real implementation would need proper file handling
-  const ffmpegCmd = `
-    ffmpeg -f concat -safe 0 -i ${concatFile} \
-      -c:v libx264 -pix_fmt yuv420p \
-      -c:a aac -b:a 128k \
-      -y ${outputPath}
-  `;
-
-  console.log(`[FinalVideoRenderer] Running FFmpeg: ${ffmpegCmd}`);
-
-  try {
-    // Note: This is a mock - real implementation needs proper file downloads
-    console.log(
-      "[FinalVideoRenderer] FFmpeg processing (mock) - would stitch scenes in production"
-    );
-  } catch (error) {
-    console.error("[FinalVideoRenderer] FFmpeg error:", error);
-    throw error;
+  if (segmentPaths.length === 0) {
+    throw new Error("No scene segments could be rendered — check that images are accessible");
   }
+
+  // Concatenate all segments
+  const concatFile = path.join(tempDir, "concat.txt");
+  fs.writeFileSync(concatFile, segmentPaths.map((p) => `file '${p}'`).join("\n"));
+
+  const concatCmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -c copy "${outputPath}"`;
+  console.log(`[FinalVideoRenderer] Concatenating ${segmentPaths.length} segments`);
+  execSync(concatCmd, { stdio: "pipe" });
 }
 
 /**
@@ -270,7 +311,7 @@ export async function generateFinalVideo(
     console.log("[FinalVideoRenderer] Step 2/5: Generating scenes and narration");
     const sceneAssets = await Promise.all(
       config.scenes.map(async (scene) => {
-        const [imageUrl, { audioUrl, durationSeconds }] = await Promise.all([
+        const [imageUrl, narration] = await Promise.all([
           generateSceneImage(config, scene),
           generateNarrationAudio(scene.narration, config.language, config.childName),
         ]);
@@ -278,8 +319,8 @@ export async function generateFinalVideo(
         return {
           sceneNumber: scene.sceneNumber,
           imageUrl,
-          audioUrl,
-          durationSeconds,
+          audioUrl: narration.audioUrl,
+          durationSeconds: narration.durationSeconds,
         };
       })
     );
@@ -307,18 +348,22 @@ export async function generateFinalVideo(
     const allScenes = [
       {
         imageUrl: intro.imageUrl,
-        audioUrl: backgroundMusicUrl, // Intro uses background music
+        audioUrl: backgroundMusicUrl,
         durationSeconds: intro.durationSeconds,
       },
       ...sceneAssets,
       {
         imageUrl: endScreen.imageUrl,
-        audioUrl: backgroundMusicUrl, // End screen uses background music
+        audioUrl: backgroundMusicUrl,
         durationSeconds: endScreen.durationSeconds,
       },
     ];
 
     await stitchVideoWithFFmpeg(allScenes, backgroundMusicUrl, outputPath);
+
+    if (!fs.existsSync(outputPath)) {
+      throw new Error("FFmpeg did not produce an output file");
+    }
 
     // Step 6: Upload to storage
     console.log("[FinalVideoRenderer] Uploading final video to storage");
@@ -330,8 +375,8 @@ export async function generateFinalVideo(
     );
 
     // Clean up temporary files
-    fs.unlinkSync(outputPath);
-    fs.unlinkSync(path.join(path.dirname(outputPath), "concat.txt"));
+    try { fs.unlinkSync(outputPath); } catch { /* ignore */ }
+    try { fs.unlinkSync(path.join(path.dirname(outputPath), "concat.txt")); } catch { /* ignore */ }
 
     console.log(
       `[FinalVideoRenderer] Final video generation complete: ${videoUrl}`

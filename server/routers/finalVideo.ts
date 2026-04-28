@@ -244,7 +244,16 @@ export const finalVideoRouter = router({
           throw new Error("Unauthorized");
         }
 
-        // Reset status and restart
+        if (!storyOrder.storyScript) {
+          throw new Error("Story script not generated yet");
+        }
+
+        const scenes = parseStoryJSON(storyOrder.storyScript);
+        if (scenes.length === 0) {
+          throw new Error("Story has no scenes");
+        }
+
+        // Reset status
         await db
           .update(storyOrders)
           .set({
@@ -256,8 +265,49 @@ export const finalVideoRouter = router({
           })
           .where(eq(storyOrders.id, input.storyOrderId));
 
-        // Call startFinalVideoGeneration again
+        // Create a new render job and restart generation
+        const jobId = `final-video-retry-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const renderJob = await db
+          .insert(finalVideoRenderJobs)
+          .values({
+            storyOrderId: input.storyOrderId,
+            jobId,
+            status: "processing",
+            stage: "reading_story",
+            progress: 0,
+          })
+          .$returningId();
+
+        const renderJobId = renderJob[0]?.id;
+        if (!renderJobId) {
+          throw new Error("Failed to create render job");
+        }
+
+        await db
+          .update(storyOrders)
+          .set({ finalVideoJobId: jobId })
+          .where(eq(storyOrders.id, input.storyOrderId));
+
+        generateFinalVideoAsync(
+          {
+            storyId: input.storyOrderId.toString(),
+            userId: ctx.user.id.toString(),
+            childName: storyOrder.childName,
+            childAge: storyOrder.childAge,
+            language: storyOrder.language as "en" | "hi",
+            animationStyle: storyOrder.animationStyle as "cartoon" | "storybook" | "magical",
+            musicMood: storyOrder.musicMood as "playful" | "calm" | "adventurous",
+            scenes,
+            childPhotoUrl: storyOrder.childPhotoUrl || undefined,
+          },
+          renderJobId,
+          input.storyOrderId
+        ).catch((error) => {
+          console.error("[Final Video Router] Retry background generation failed:", error);
+        });
+
         return {
+          jobId: renderJobId,
           message: "Retrying video generation",
           storyOrderId: input.storyOrderId,
         };

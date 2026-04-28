@@ -200,6 +200,29 @@ Return ONLY valid JSON array of 10 scenes. No markdown, no code blocks, just pur
     }),
 
   /**
+   * Update story script with edited scenes
+   */
+  updateScript: protectedProcedure
+    .input(
+      z.object({
+        storyOrderId: z.number(),
+        scenes: z.array(StorySceneSchema),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const story = await getStoryOrderById(input.storyOrderId);
+      if (!story || story.userId !== ctx.user.id) {
+        throw new Error("Story not found or unauthorized");
+      }
+
+      await updateStoryOrder(input.storyOrderId, {
+        storyScript: JSON.stringify(input.scenes),
+      });
+
+      return { success: true };
+    }),
+
+  /**
    * Submit feedback on story effectiveness
    */
   submitFeedback: protectedProcedure

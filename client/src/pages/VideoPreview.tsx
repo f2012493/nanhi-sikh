@@ -187,7 +187,7 @@ export default function VideoPreview() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => navigate("/story-review/:storyId" as any)}
+              onClick={() => navigate(`/story-review/${jobId}` as any)}
               className="gap-2"
             >
               <ArrowLeft className="w-4 h-4" />

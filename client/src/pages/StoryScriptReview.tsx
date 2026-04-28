@@ -45,6 +45,9 @@ export default function StoryScriptReview() {
     { enabled: !!storyId && !!user }
   );
 
+  // Save edited script mutation
+  const updateScriptMutation = trpc.story.updateScript.useMutation();
+
   // Start video generation
   const generateVideoMutation = trpc.finalVideo.startFinalVideoGeneration.useMutation({
     onSuccess: (data: any) => {
@@ -90,9 +93,12 @@ export default function StoryScriptReview() {
 
     setIsGeneratingVideo(true);
     try {
-      // Update the story with edited scenes
-      const updatedScript = JSON.stringify(editedScenes);
-      
+      // Save any edits to the script before generating the video
+      await updateScriptMutation.mutateAsync({
+        storyOrderId: storyId,
+        scenes: editedScenes,
+      });
+
       generateVideoMutation.mutate({
         storyOrderId: storyId,
       });

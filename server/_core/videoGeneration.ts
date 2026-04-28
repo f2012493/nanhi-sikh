@@ -4,6 +4,7 @@ import * as path from "path";
 import { invokeLLM } from "./llm";
 import { generateImage } from "./imageGeneration";
 import { transcribeAudio } from "./voiceTranscription";
+import { storagePut } from "../storage";
 
 /**
  * Story Scene structure from AI generation
@@ -276,21 +277,17 @@ async function downloadAssets(
     const localPath = path.join(tempDir, `${type}-${i}.${ext}`);
 
     try {
-      // Mock download - in production would use curl or fetch
       console.log(`[Video Generation] Downloading ${type} ${i + 1}/${urls.length}`);
-
-      // For demo purposes, create placeholder files
-      if (type === "image") {
-        // Create a simple placeholder image
-        fs.writeFileSync(localPath, Buffer.from("placeholder-image-data"));
-      } else {
-        // Create a placeholder audio file
-        fs.writeFileSync(localPath, Buffer.from("placeholder-audio-data"));
+      const resolved = url.startsWith("http") ? url : `${process.env.SERVER_BASE_URL || "http://localhost:3000"}${url}`;
+      const response = await fetch(resolved);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} fetching ${resolved}`);
       }
-
+      const buffer = Buffer.from(await response.arrayBuffer());
+      fs.writeFileSync(localPath, buffer);
       localPaths.push(localPath);
     } catch (error) {
-      console.error(`[Video Generation] Failed to download ${type}:`, error);
+      console.error(`[Video Generation] Failed to download ${type} from ${url}:`, error);
       throw error;
     }
   }
@@ -453,14 +450,8 @@ export async function generateVideo(
  * Upload video to storage (S3)
  */
 async function uploadVideoToStorage(videoPath: string, storyId: string): Promise<string> {
-  // Mock implementation - would integrate with S3
-  // In production, this would use storagePut from server/storage.ts
-  try {
-    const mockUrl = `/manus-storage/videos/${storyId}-${Date.now()}.mp4`;
-    console.log(`[Video Generation] Mock upload: ${mockUrl}`);
-    return mockUrl;
-  } catch (error) {
-    console.error("[Video Generation] Upload failed:", error);
-    throw error;
-  }
+  const videoBuffer = fs.readFileSync(videoPath);
+  const { url } = await storagePut(`videos/${storyId}-${Date.now()}.mp4`, videoBuffer, "video/mp4");
+  console.log(`[Video Generation] Uploaded video: ${url}`);
+  return url;
 }
